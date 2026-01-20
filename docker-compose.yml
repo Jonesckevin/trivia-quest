@@ -1,0 +1,15 @@
+services:
+  trivia-quest:
+    build: .
+    container_name: trivia-quest
+    ports:
+      - "8286:80"
+    environment:
+      - APP_TITLE=Trivia Questss
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s

@@ -1,0 +1,21 @@
+{
+  "name": "Trivia Quest",
+  "short_name": "Trivia Quest",
+  "description": "A Jeopardy-inspired trivia game with team scoring, custom questions, and offline support",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0d0d1a",
+  "theme_color": "#8b5cf6",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["games", "entertainment", "education"],
+  "lang": "en-US",
+  "dir": "ltr"
+}

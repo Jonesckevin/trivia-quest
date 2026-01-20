@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${APP_TITLE}</title>
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#8b5cf6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="logo.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Sidebar Toggle Button -->
+    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+        <span class="hamburger"></span>
+    </button>
+
+    <!-- Left Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h2>Host Controls</h2>
+        </div>
+        
+        <div class="sidebar-content">
+            <!-- Game Mode -->
+            <section class="control-section">
+                <h3>Game Mode</h3>
+                <div class="button-group">
+                    <button class="btn btn-primary" id="singleModeBtn">Single Questions</button>
+                    <button class="btn btn-secondary" id="jeopardyModeBtn">Jeopardy Board</button>
+                </div>
+            </section>
+
+            <!-- Team Setup -->
+            <section class="control-section">
+                <h3>Teams</h3>
+                <div class="form-group">
+                    <label for="teamCount">Number of Teams</label>
+                    <select id="teamCount">
+                        <option value="1">1 (Solo Mode)</option>
+                        <option value="2">2 Teams</option>
+                        <option value="3">3 Teams</option>
+                        <option value="4">4 Teams</option>
+                    </select>
+                </div>
+                <div class="team-names-header">
+                    <small>Click names below to edit:</small>
+                </div>
+                <div id="teamNames" class="team-names"></div>
+            </section>
+
+            <!-- Points Settings -->
+            <section class="control-section">
+                <h3>Points</h3>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="usePointValues" checked>
+                        Use difficulty-based points
+                    </label>
+                </div>
+                <div id="pointSettings" class="point-settings">
+                    <div class="form-group">
+                        <label for="l1Points">Base Points (Row 1)</label>
+                        <input type="number" id="l1Points" value="100" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="l2Points">L2 Multiplier Points</label>
+                        <input type="number" id="l2Points" value="200" min="1">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Jeopardy Board Settings -->
+            <section class="control-section">
+                <h3>Jeopardy Board</h3>
+                <div class="form-group">
+                    <label for="jeopardyRows">
+                        Number of Rows <span id="maxRowsInfo" class="max-rows-info">(max: 5)</span>
+                    </label>
+                    <input type="number" id="jeopardyRows" value="5" min="1" max="10">
+                </div>
+                <div class="form-group">
+                    <label for="pointLabel">Point Label <small>(max 3 chars)</small></label>
+                    <input type="text" id="pointLabel" value="" maxlength="3" placeholder="e.g., PTs, MVs, $">
+                    <small>Leave empty for default ($100, $200...)</small>
+                </div>
+                <div class="form-group">
+                    <label for="pointImageUrl">Custom Point Image URL</label>
+                    <input type="text" id="pointImageUrl" value="" placeholder="https://... or leave empty">
+                </div>
+                <div class="form-group">
+                    <label for="pointImageMode">Image Display Mode</label>
+                    <select id="pointImageMode">
+                        <option value="none">No Image (Text Only)</option>
+                        <option value="replace">Replace Point Text</option>
+                        <option value="fullcell">Full Cell Background</option>
+                    </select>
+                </div>
+                <div class="form-group image-preview-group hidden" id="imagePreviewGroup">
+                    <label>Preview:</label>
+                    <div class="image-preview-box">
+                        <img id="pointImagePreview" src="" alt="Preview">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Feedback & Sound -->
+            <section class="control-section">
+                <h3>Effects</h3>
+                <div class="form-group">
+                    <label for="answerDifficulty">Answer Difficulty</label>
+                    <select id="answerDifficulty">
+                        <option value="easy">Easy (4 choices)</option>
+                        <option value="medium">Medium (6 choices)</option>
+                        <option value="hard">Hard (8 choices)</option>
+                    </select>
+                    <small>Controls how many answer options are shown</small>
+                </div>
+                <div class="form-group">
+                    <label for="feedbackIntensity">Feedback Intensity</label>
+                    <select id="feedbackIntensity">
+                        <option value="low">Low (Border only)</option>
+                        <option value="medium" selected>Medium (Color pulse)</option>
+                        <option value="full">Full (Dramatic)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="volumeSlider">Sound Volume</label>
+                    <div class="volume-control">
+                        <span class="volume-icon" id="volumeIcon">🔊</span>
+                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="50">
+                        <span class="volume-label" id="volumeLabel">50%</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Question Management -->
+            <section class="control-section">
+                <h3>Questions</h3>
+                <div class="button-group">
+                    <button class="btn btn-accent" id="loadSampleBtn">Load Sample Questions</button>
+                    <button class="btn btn-secondary" id="importBtn">Import JSONL</button>
+                    <button class="btn btn-secondary" id="exportBtn">Export JSONL</button>
+                </div>
+                <input type="file" id="importFile" accept=".jsonl" hidden>
+            </section>
+
+            <!-- Add Question Form -->
+            <section class="control-section">
+                <h3>Add Question</h3>
+                <form id="addQuestionForm">
+                    <div class="form-group">
+                        <label for="newCategory">Category</label>
+                        <input type="text" id="newCategory" required placeholder="e.g., Science">
+                    </div>
+                    <div class="form-group">
+                        <label for="newDifficulty">Difficulty</label>
+                        <select id="newDifficulty" required>
+                            <option value="L1">L1 (Easy)</option>
+                            <option value="L2">L2 (Hard)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="newQuestion">Question</label>
+                        <textarea id="newQuestion" required placeholder="Enter your question..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="newAnswers">Correct Answer(s) <small>(comma-separated)</small></label>
+                        <input type="text" id="newAnswers" required placeholder="e.g., Paris, paris">
+                    </div>
+                    <div class="form-group">
+                        <label for="newIncorrect">Incorrect Answers <small>(3-7, comma-separated)</small></label>
+                        <input type="text" id="newIncorrect" required placeholder="e.g., London, Berlin, Madrid, Rome, Vienna, Amsterdam, Brussels">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add Question</button>
+                </form>
+            </section>
+
+            <!-- Reset -->
+            <section class="control-section">
+                <button class="btn btn-danger" id="resetBtn">Reset All Data</button>
+            </section>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+        <!-- Header -->
+        <header class="game-header">
+            <div class="logo-title">
+                <img src="logo.svg" alt="MV Logo" class="header-logo">
+                <h1 class="game-title">${APP_TITLE}</h1>
+            </div>
+            <div class="question-counter" id="questionCounter" aria-live="polite" aria-atomic="true">
+                <span class="counter-number" id="remainingCount">0</span>
+                <span class="counter-label">questions remaining</span>
+            </div>
+        </header>
+
+        <!-- Single Question Mode -->
+        <section class="game-area single-mode" id="singleMode">
+            <div class="question-card" id="questionCard">
+                <div class="question-meta">
+                    <span class="category-badge" id="currentCategory">Category</span>
+                    <span class="difficulty-badge" id="currentDifficulty">L1</span>
+                    <span class="points-badge" id="currentPoints">100 pts</span>
+                </div>
+                <p class="question-text" id="questionText">Press "Next Question" to start!</p>
+                <div class="answers-grid" id="answersGrid"></div>
+                <div class="question-actions">
+                    <button class="btn btn-primary" id="nextQuestionBtn">Next Question</button>
+                    <button class="btn btn-secondary" id="skipQuestionBtn" disabled>Skip</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Jeopardy Mode -->
+        <section class="game-area jeopardy-mode hidden" id="jeopardyMode">
+            <div class="jeopardy-board" id="jeopardyBoard"></div>
+        </section>
+
+        <!-- Question Modal (for Jeopardy) -->
+        <div class="modal-overlay hidden" id="questionModal" role="dialog" aria-modal="true" aria-labelledby="modalQuestionText">
+            <div class="modal-content">
+                <div class="question-meta">
+                    <span class="category-badge" id="modalCategory">Category</span>
+                    <span class="difficulty-badge" id="modalDifficulty">L1</span>
+                    <span class="points-badge" id="modalPoints">100 pts</span>
+                </div>
+                <p class="question-text" id="modalQuestionText">Question goes here</p>
+                <div class="answers-grid" id="modalAnswersGrid"></div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="closeModalBtn">Close</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Team Scoreboard -->
+    <footer class="scoreboard hidden" id="scoreboard" aria-live="polite">
+        <div class="scoreboard-inner" id="scoreboardInner" aria-label="Team scores"></div>
+        <div class="award-points hidden" id="awardPoints">
+            <span class="award-label">Award points to:</span>
+            <div class="award-buttons" id="awardButtons"></div>
+            <button class="btn btn-small btn-secondary" id="noPointsBtn">Skip / No Points</button>
+        </div>
+    </footer>
+
+    <!-- GitHub Footer -->
+    <div class="github-footer">
+        <span class="footer-brand">Trivia Quest</span>
+        <span class="footer-divider">|</span>
+        <a href="https://github.com/jonesckevin/trivia-quest" target="_blank" rel="noopener noreferrer" class="github-link" title="View on GitHub">
+            <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
+            </svg>
+            <span>GitHub</span>
+        </a>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
