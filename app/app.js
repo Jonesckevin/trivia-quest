@@ -18,7 +18,7 @@ let state = {
     pointImageUrl: '',
     pointImageMode: 'none', // 'none', 'replace', 'fullcell'
     answerDifficulty: 'easy', // 'easy' (3 wrong), 'medium' (5 wrong), 'hard' (7 wrong)
-    feedbackIntensity: 'medium',
+    feedbackIntensity: 'full',
     volume: 0.5, // 0 to 1 volume level
     answerRevealed: false
 };
@@ -156,12 +156,25 @@ const elements = {
     modalAnswersGrid: document.getElementById('modalAnswersGrid'),
     closeModalBtn: document.getElementById('closeModalBtn'),
     
+    // Add Question Modal
+    addQuestionModal: document.getElementById('addQuestionModal'),
+    openAddQuestionBtn: document.getElementById('openAddQuestionBtn'),
+    closeAddQuestionBtn: document.getElementById('closeAddQuestionBtn'),
+    
     // Scoreboard
     scoreboard: document.getElementById('scoreboard'),
     scoreboardInner: document.getElementById('scoreboardInner'),
     awardPoints: document.getElementById('awardPoints'),
     awardButtons: document.getElementById('awardButtons'),
-    noPointsBtn: document.getElementById('noPointsBtn')
+    noPointsBtn: document.getElementById('noPointsBtn'),
+    
+    // Inline award sections
+    questionActions: document.getElementById('questionActions'),
+    singleAwardSection: document.getElementById('singleAwardSection'),
+    singleNoPointsBtn: document.getElementById('singleNoPointsBtn'),
+    modalCloseSection: document.getElementById('modalCloseSection'),
+    modalAwardSection: document.getElementById('modalAwardSection'),
+    modalNoPointsBtn: document.getElementById('modalNoPointsBtn')
 };
 
 // ==================== STORAGE ====================
@@ -170,11 +183,11 @@ function saveState() {
         ...state,
         usedQuestions: Array.from(state.usedQuestions)
     };
-    sessionStorage.setItem('triviaQuestState', JSON.stringify(saveData));
+    localStorage.setItem('triviaQuestState', JSON.stringify(saveData));
 }
 
 function loadState() {
-    const saved = sessionStorage.getItem('triviaQuestState');
+    const saved = localStorage.getItem('triviaQuestState');
     if (saved) {
         const parsed = JSON.parse(saved);
         state = {
@@ -305,17 +318,53 @@ function updateScoreboard() {
 }
 
 function updateAwardButtons() {
-    elements.awardButtons.innerHTML = '';
+    // Update both single mode and modal award buttons
+    const containers = [
+        { buttons: document.getElementById('singleAwardButtons'), label: document.getElementById('singleAwardLabel'), isModal: false },
+        { buttons: document.getElementById('modalAwardButtons'), label: document.getElementById('modalAwardLabel'), isModal: true }
+    ];
     
+    containers.forEach(({ buttons, label, isModal }) => {
+        if (!buttons) return;
+        buttons.innerHTML = '';
+        
+        // Update label
+        if (label) {
+            label.textContent = state.teamCount <= 1 ? 'Mark as:' : 'Award points to:';
+        }
+        
+        // Use larger buttons for modal
+        const btnSize = isModal ? '' : 'btn-small';
+        
+        if (state.teamCount <= 1) {
+            // Solo mode - simple Correct button
+            const correctBtn = document.createElement('button');
+            correctBtn.className = `btn ${btnSize} btn-success`.trim();
+            correctBtn.textContent = '✓ Correct';
+            correctBtn.addEventListener('click', () => awardPointsToTeam(0));
+            buttons.appendChild(correctBtn);
+        } else {
+            // Multi-team mode - button per team
+            for (let i = 0; i < state.teamCount; i++) {
+                const team = state.teams[i];
+                const btn = document.createElement('button');
+                btn.className = `btn ${btnSize} btn-accent`.trim();
+                btn.textContent = team.name;
+                btn.addEventListener('click', () => awardPointsToTeam(i));
+                buttons.appendChild(btn);
+            }
+        }
+    });
+    
+    // Also update the footer award buttons for backwards compatibility
+    elements.awardButtons.innerHTML = '';
     if (state.teamCount <= 1) {
-        // Solo mode - simple Correct button
         const correctBtn = document.createElement('button');
         correctBtn.className = 'btn btn-small btn-success';
         correctBtn.textContent = '✓ Correct';
         correctBtn.addEventListener('click', () => awardPointsToTeam(0));
         elements.awardButtons.appendChild(correctBtn);
     } else {
-        // Multi-team mode - button per team
         for (let i = 0; i < state.teamCount; i++) {
             const team = state.teams[i];
             const btn = document.createElement('button');
@@ -329,14 +378,42 @@ function updateAwardButtons() {
 
 function showAwardButtons() {
     if (state.answerRevealed) {
+        updateAwardButtons();
+        
+        // Show inline award sections based on game mode
+        if (state.gameMode === 'jeopardy') {
+            // Hide close button, show award section in modal
+            const closeSection = document.getElementById('modalCloseSection');
+            const awardSection = document.getElementById('modalAwardSection');
+            if (closeSection) closeSection.classList.add('hidden');
+            if (awardSection) awardSection.classList.remove('hidden');
+        } else {
+            // Hide next/skip buttons, show award section in single mode
+            const questionActions = document.getElementById('questionActions');
+            const awardSection = document.getElementById('singleAwardSection');
+            if (questionActions) questionActions.classList.add('hidden');
+            if (awardSection) awardSection.classList.remove('hidden');
+        }
+        
+        // Also show footer award for backwards compatibility (hidden by CSS if not needed)
         elements.awardPoints.classList.remove('hidden');
         updateAwardLabel();
-        updateAwardButtons();
     }
 }
 
 function hideAwardButtons() {
     elements.awardPoints.classList.add('hidden');
+    
+    // Hide inline award sections and restore original buttons
+    const singleAwardSection = document.getElementById('singleAwardSection');
+    const questionActions = document.getElementById('questionActions');
+    const modalAwardSection = document.getElementById('modalAwardSection');
+    const modalCloseSection = document.getElementById('modalCloseSection');
+    
+    if (singleAwardSection) singleAwardSection.classList.add('hidden');
+    if (questionActions) questionActions.classList.remove('hidden');
+    if (modalAwardSection) modalAwardSection.classList.add('hidden');
+    if (modalCloseSection) modalCloseSection.classList.remove('hidden');
 }
 
 function updateAwardLabel() {
@@ -366,6 +443,27 @@ function awardPointsToTeam(teamIndex) {
     updateScoreboard();
     hideAwardButtons();
     saveState();
+    
+    // Proceed to next action based on game mode
+    proceedAfterAward();
+}
+
+function skipAward() {
+    hideAwardButtons();
+    proceedAfterAward();
+}
+
+function proceedAfterAward() {
+    if (state.gameMode === 'jeopardy') {
+        // Close modal and return to board
+        elements.questionModal.classList.add('hidden');
+        state.answerRevealed = false;
+        state.currentQuestion = null;
+        state.currentQuestionIndex = null;
+    } else {
+        // Single mode - go to next question
+        nextQuestion();
+    }
 }
 
 // ==================== QUESTION LOGIC ====================
@@ -798,6 +896,9 @@ function openJeopardyQuestion(index, customPoints = null) {
 function closeModal() {
     elements.questionModal.classList.add('hidden');
     hideAwardButtons();
+    state.answerRevealed = false;
+    state.currentQuestion = null;
+    state.currentQuestionIndex = null;
 }
 
 // ==================== IMPORT/EXPORT ====================
@@ -955,8 +1056,9 @@ function addQuestion(e) {
     }
     saveState();
     
-    // Reset form
+    // Reset form and close modal
     e.target.reset();
+    closeAddQuestionModal();
     alert('Question added!');
 }
 
@@ -966,7 +1068,8 @@ function resetAll() {
         return;
     }
     
-    sessionStorage.removeItem('triviaQuestState');
+    localStorage.removeItem('triviaQuestState');
+    localStorage.removeItem('sidebarCollapsedSections');
     
     state = {
         questions: [],
@@ -987,7 +1090,7 @@ function resetAll() {
         pointImageUrl: '',
         pointImageMode: 'none',
         answerDifficulty: 'easy',
-        feedbackIntensity: 'medium',
+        feedbackIntensity: 'full',
         volume: 0.5,
         answerRevealed: false
     };
@@ -1002,7 +1105,7 @@ function resetAll() {
     elements.pointImageUrl.value = '';
     elements.pointImageMode.value = 'none';
     elements.answerDifficulty.value = 'easy';
-    elements.feedbackIntensity.value = 'medium';
+    elements.feedbackIntensity.value = 'full';
     elements.volumeSlider.value = '50';
     updateVolumeUI();
     elements.imagePreviewGroup.classList.add('hidden');
@@ -1043,6 +1146,60 @@ function setGameMode(mode) {
 function toggleSidebar() {
     elements.sidebar.classList.toggle('open');
     elements.sidebarToggle.classList.toggle('active');
+}
+
+// Accordion toggle for control sections
+function initAccordion() {
+    const sections = document.querySelectorAll('.control-section[data-section]');
+    
+    // Load collapsed state from localStorage
+    const savedState = localStorage.getItem('sidebarCollapsedSections');
+    const collapsedSections = savedState ? JSON.parse(savedState) : ['points'];
+    
+    sections.forEach(section => {
+        const sectionId = section.dataset.section;
+        const header = section.querySelector('h3');
+        
+        // Apply saved collapsed state
+        if (collapsedSections.includes(sectionId)) {
+            section.classList.add('collapsed');
+        }
+        
+        // Add click handler to toggle
+        if (header) {
+            header.addEventListener('click', (e) => {
+                e.stopPropagation();
+                section.classList.toggle('collapsed');
+                saveAccordionState();
+            });
+        }
+    });
+}
+
+function saveAccordionState() {
+    const sections = document.querySelectorAll('.control-section[data-section]');
+    const collapsedSections = [];
+    
+    sections.forEach(section => {
+        if (section.classList.contains('collapsed')) {
+            collapsedSections.push(section.dataset.section);
+        }
+    });
+    
+    localStorage.setItem('sidebarCollapsedSections', JSON.stringify(collapsedSections));
+}
+
+// ==================== ADD QUESTION MODAL ====================
+function openAddQuestionModal() {
+    const modal = document.getElementById('addQuestionModal');
+    modal.classList.remove('hidden');
+    document.getElementById('newCategory').focus();
+}
+
+function closeAddQuestionModal() {
+    const modal = document.getElementById('addQuestionModal');
+    modal.classList.add('hidden');
+    elements.addQuestionForm.reset();
 }
 
 // Update image preview in settings
@@ -1181,6 +1338,15 @@ function initEventListeners() {
     
     elements.exportBtn.addEventListener('click', exportToJSONL);
     
+    // Add Question Modal
+    elements.openAddQuestionBtn.addEventListener('click', openAddQuestionModal);
+    elements.closeAddQuestionBtn.addEventListener('click', closeAddQuestionModal);
+    elements.addQuestionModal.addEventListener('click', (e) => {
+        if (e.target === elements.addQuestionModal) {
+            closeAddQuestionModal();
+        }
+    });
+    
     elements.addQuestionForm.addEventListener('submit', addQuestion);
     
     elements.resetBtn.addEventListener('click', resetAll);
@@ -1192,18 +1358,29 @@ function initEventListeners() {
     // Modal
     elements.closeModalBtn.addEventListener('click', closeModal);
     elements.questionModal.addEventListener('click', (e) => {
-        if (e.target === elements.questionModal) {
+        // Only close if clicking overlay and answer not revealed (before answering)
+        if (e.target === elements.questionModal && !state.answerRevealed) {
             closeModal();
         }
     });
     
-    // No points button
-    elements.noPointsBtn.addEventListener('click', hideAwardButtons);
+    // Skip/No Points buttons (all three locations)
+    elements.noPointsBtn.addEventListener('click', skipAward);
+    if (elements.singleNoPointsBtn) {
+        elements.singleNoPointsBtn.addEventListener('click', skipAward);
+    }
+    if (elements.modalNoPointsBtn) {
+        elements.modalNoPointsBtn.addEventListener('click', skipAward);
+    }
     
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         // Escape key - close modal or sidebar
         if (e.key === 'Escape') {
+            if (!elements.addQuestionModal.classList.contains('hidden')) {
+                closeAddQuestionModal();
+                return;
+            }
             if (!elements.questionModal.classList.contains('hidden')) {
                 closeModal();
             }
@@ -1233,7 +1410,7 @@ function initEventListeners() {
             return;
         }
         
-        // Enter key - next question (single mode) or submit multi-select
+        // Enter key - submit multi-select or start next question (only if not awaiting award)
         if (e.key === 'Enter') {
             // Check for multi-select submit button
             const isModalOpen = !elements.questionModal.classList.contains('hidden');
@@ -1245,13 +1422,13 @@ function initEventListeners() {
                 return;
             }
             
-            // If answer revealed, go to next question (single mode only)
-            if (state.answerRevealed && state.gameMode === 'single') {
-                nextQuestion();
+            // Block proceeding if answer revealed (must use award/skip buttons)
+            if (state.answerRevealed) {
+                // Don't allow Enter to bypass the award flow
                 return;
             }
             
-            // If no question displayed, start next question
+            // If no question displayed, start next question (single mode only)
             if (!state.currentQuestion && state.gameMode === 'single') {
                 nextQuestion();
                 return;
@@ -1313,6 +1490,7 @@ function init() {
     }
     
     initEventListeners();
+    initAccordion();
     updateTeamInputs();
     updateScoreboard();
     updateQuestionCounter();

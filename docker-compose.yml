@@ -5,7 +5,7 @@ services:
     ports:
       - "8286:80"
     environment:
-      - APP_TITLE=Trivia Questss
+      - APP_TITLE=Trivia Quest
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]

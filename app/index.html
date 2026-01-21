@@ -29,162 +29,147 @@
         
         <div class="sidebar-content">
             <!-- Game Mode -->
-            <section class="control-section">
+            <section class="control-section" data-section="game-mode">
                 <h3>Game Mode</h3>
-                <div class="button-group">
-                    <button class="btn btn-primary" id="singleModeBtn">Single Questions</button>
-                    <button class="btn btn-secondary" id="jeopardyModeBtn">Jeopardy Board</button>
+                <div class="section-content">
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="singleModeBtn">Single Questions</button>
+                        <button class="btn btn-secondary" id="jeopardyModeBtn">Jeopardy Board</button>
+                    </div>
                 </div>
             </section>
 
             <!-- Team Setup -->
-            <section class="control-section">
+            <section class="control-section" data-section="teams">
                 <h3>Teams</h3>
-                <div class="form-group">
-                    <label for="teamCount">Number of Teams</label>
-                    <select id="teamCount">
-                        <option value="1">1 (Solo Mode)</option>
-                        <option value="2">2 Teams</option>
-                        <option value="3">3 Teams</option>
-                        <option value="4">4 Teams</option>
-                    </select>
+                <div class="section-content">
+                    <div class="form-group">
+                        <label for="teamCount">Number of Teams</label>
+                        <select id="teamCount">
+                            <option value="1">1 (Solo Mode)</option>
+                            <option value="2">2 Teams</option>
+                            <option value="3">3 Teams</option>
+                            <option value="4">4 Teams</option>
+                        </select>
+                    </div>
+                    <div class="team-names-header">
+                        <small>Click names below to edit:</small>
+                    </div>
+                    <div id="teamNames" class="team-names"></div>
                 </div>
-                <div class="team-names-header">
-                    <small>Click names below to edit:</small>
-                </div>
-                <div id="teamNames" class="team-names"></div>
             </section>
 
             <!-- Points Settings -->
-            <section class="control-section">
+            <section class="control-section collapsed" data-section="points">
                 <h3>Points</h3>
-                <div class="form-group">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="usePointValues" checked>
-                        Use difficulty-based points
-                    </label>
-                </div>
-                <div id="pointSettings" class="point-settings">
+                <div class="section-content">
                     <div class="form-group">
-                        <label for="l1Points">Base Points (Row 1)</label>
-                        <input type="number" id="l1Points" value="100" min="1">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="usePointValues" checked>
+                            Use difficulty-based points
+                        </label>
                     </div>
-                    <div class="form-group">
-                        <label for="l2Points">L2 Multiplier Points</label>
-                        <input type="number" id="l2Points" value="200" min="1">
+                    <div id="pointSettings" class="point-settings">
+                        <div class="form-group">
+                            <label for="l1Points">Base Points (Row 1)</label>
+                            <input type="number" id="l1Points" value="100" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="l2Points">L2 Multiplier Points</label>
+                            <input type="number" id="l2Points" value="200" min="1">
+                        </div>
                     </div>
                 </div>
             </section>
 
             <!-- Jeopardy Board Settings -->
-            <section class="control-section">
+            <section class="control-section" data-section="jeopardy-board">
                 <h3>Jeopardy Board</h3>
-                <div class="form-group">
-                    <label for="jeopardyRows">
-                        Number of Rows <span id="maxRowsInfo" class="max-rows-info">(max: 5)</span>
-                    </label>
-                    <input type="number" id="jeopardyRows" value="5" min="1" max="10">
-                </div>
-                <div class="form-group">
-                    <label for="pointLabel">Point Label <small>(max 3 chars)</small></label>
-                    <input type="text" id="pointLabel" value="" maxlength="3" placeholder="e.g., PTs, MVs, $">
-                    <small>Leave empty for default ($100, $200...)</small>
-                </div>
-                <div class="form-group">
-                    <label for="pointImageUrl">Custom Point Image URL</label>
-                    <input type="text" id="pointImageUrl" value="" placeholder="https://... or leave empty">
-                </div>
-                <div class="form-group">
-                    <label for="pointImageMode">Image Display Mode</label>
-                    <select id="pointImageMode">
-                        <option value="none">No Image (Text Only)</option>
-                        <option value="replace">Replace Point Text</option>
-                        <option value="fullcell">Full Cell Background</option>
-                    </select>
-                </div>
-                <div class="form-group image-preview-group hidden" id="imagePreviewGroup">
-                    <label>Preview:</label>
-                    <div class="image-preview-box">
-                        <img id="pointImagePreview" src="" alt="Preview">
+                <div class="section-content">
+                    <div class="form-group">
+                        <label for="jeopardyRows">
+                            Number of Rows <span id="maxRowsInfo" class="max-rows-info">(max: 5)</span>
+                        </label>
+                        <input type="number" id="jeopardyRows" value="5" min="1" max="10">
+                    </div>
+                    <div class="form-group">
+                        <label for="pointLabel">Point Label <small>(max 3 chars)</small></label>
+                        <input type="text" id="pointLabel" value="" maxlength="3" placeholder="e.g., PTs, MVs, $">
+                        <small>Leave empty for default ($100, $200...)</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="pointImageUrl">Custom Point Image URL</label>
+                        <input type="text" id="pointImageUrl" value="" placeholder="https://... or leave empty">
+                    </div>
+                    <div class="form-group">
+                        <label for="pointImageMode">Image Display Mode</label>
+                        <select id="pointImageMode">
+                            <option value="none">No Image (Text Only)</option>
+                            <option value="replace">Replace Point Text</option>
+                            <option value="fullcell">Full Cell Background</option>
+                        </select>
+                    </div>
+                    <div class="form-group image-preview-group hidden" id="imagePreviewGroup">
+                        <label>Preview:</label>
+                        <div class="image-preview-box">
+                            <img id="pointImagePreview" src="" alt="Preview">
+                        </div>
                     </div>
                 </div>
             </section>
 
             <!-- Feedback & Sound -->
-            <section class="control-section">
+            <section class="control-section" data-section="effects">
                 <h3>Effects</h3>
-                <div class="form-group">
-                    <label for="answerDifficulty">Answer Difficulty</label>
-                    <select id="answerDifficulty">
-                        <option value="easy">Easy (4 choices)</option>
-                        <option value="medium">Medium (6 choices)</option>
-                        <option value="hard">Hard (8 choices)</option>
-                    </select>
-                    <small>Controls how many answer options are shown</small>
-                </div>
-                <div class="form-group">
-                    <label for="feedbackIntensity">Feedback Intensity</label>
-                    <select id="feedbackIntensity">
-                        <option value="low">Low (Border only)</option>
-                        <option value="medium" selected>Medium (Color pulse)</option>
-                        <option value="full">Full (Dramatic)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="volumeSlider">Sound Volume</label>
-                    <div class="volume-control">
-                        <span class="volume-icon" id="volumeIcon">🔊</span>
-                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="50">
-                        <span class="volume-label" id="volumeLabel">50%</span>
+                <div class="section-content">
+                    <div class="form-group">
+                        <label for="answerDifficulty">Answer Difficulty</label>
+                        <select id="answerDifficulty">
+                            <option value="easy">Easy (4 choices)</option>
+                            <option value="medium">Medium (6 choices)</option>
+                            <option value="hard">Hard (8 choices)</option>
+                        </select>
+                        <small>Controls how many answer options are shown</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="feedbackIntensity">Feedback Intensity</label>
+                        <select id="feedbackIntensity">
+                            <option value="low">Low (Border only)</option>
+                            <option value="medium">Medium (Color pulse)</option>
+                            <option value="full" selected>Full (Dramatic)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="volumeSlider">Sound Volume</label>
+                        <div class="volume-control">
+                            <span class="volume-icon" id="volumeIcon">🔊</span>
+                            <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="50">
+                            <span class="volume-label" id="volumeLabel">50%</span>
+                        </div>
                     </div>
                 </div>
             </section>
 
             <!-- Question Management -->
-            <section class="control-section">
+            <section class="control-section" data-section="questions">
                 <h3>Questions</h3>
-                <div class="button-group">
-                    <button class="btn btn-accent" id="loadSampleBtn">Load Sample Questions</button>
-                    <button class="btn btn-secondary" id="importBtn">Import JSONL</button>
-                    <button class="btn btn-secondary" id="exportBtn">Export JSONL</button>
+                <div class="section-content">
+                    <div class="button-group">
+                        <button class="btn btn-accent" id="loadSampleBtn">Load Sample Questions</button>
+                        <button class="btn btn-secondary" id="importBtn">Import JSONL</button>
+                        <button class="btn btn-secondary" id="exportBtn">Export JSONL</button>
+                    </div>
+                    <input type="file" id="importFile" accept=".jsonl" hidden>
+                    <button class="btn btn-secondary" id="openAddQuestionBtn" style="margin-top: 0.5rem; width: 100%;">+ Add Question</button>
                 </div>
-                <input type="file" id="importFile" accept=".jsonl" hidden>
-            </section>
-
-            <!-- Add Question Form -->
-            <section class="control-section">
-                <h3>Add Question</h3>
-                <form id="addQuestionForm">
-                    <div class="form-group">
-                        <label for="newCategory">Category</label>
-                        <input type="text" id="newCategory" required placeholder="e.g., Science">
-                    </div>
-                    <div class="form-group">
-                        <label for="newDifficulty">Difficulty</label>
-                        <select id="newDifficulty" required>
-                            <option value="L1">L1 (Easy)</option>
-                            <option value="L2">L2 (Hard)</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="newQuestion">Question</label>
-                        <textarea id="newQuestion" required placeholder="Enter your question..."></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="newAnswers">Correct Answer(s) <small>(comma-separated)</small></label>
-                        <input type="text" id="newAnswers" required placeholder="e.g., Paris, paris">
-                    </div>
-                    <div class="form-group">
-                        <label for="newIncorrect">Incorrect Answers <small>(3-7, comma-separated)</small></label>
-                        <input type="text" id="newIncorrect" required placeholder="e.g., London, Berlin, Madrid, Rome, Vienna, Amsterdam, Brussels">
-                    </div>
-                    <button type="submit" class="btn btn-primary">Add Question</button>
-                </form>
             </section>
 
             <!-- Reset -->
-            <section class="control-section">
-                <button class="btn btn-danger" id="resetBtn">Reset All Data</button>
+            <section class="control-section" data-section="reset">
+                <h3>Reset</h3>
+                <div class="section-content">
+                    <button class="btn btn-danger" id="resetBtn">Reset All Data</button>
+                </div>
             </section>
         </div>
     </aside>
@@ -213,9 +198,14 @@
                 </div>
                 <p class="question-text" id="questionText">Press "Next Question" to start!</p>
                 <div class="answers-grid" id="answersGrid"></div>
-                <div class="question-actions">
+                <div class="question-actions" id="questionActions">
                     <button class="btn btn-primary" id="nextQuestionBtn">Next Question</button>
-                    <button class="btn btn-secondary" id="skipQuestionBtn" disabled>Skip</button>
+                    <button class="btn btn-secondary" id="skipQuestionBtn" disabled>Skip Question</button>
+                </div>
+                <div class="question-actions hidden" id="singleAwardSection">
+                    <span class="award-label" id="singleAwardLabel">Award points to:</span>
+                    <div class="award-buttons" id="singleAwardButtons"></div>
+                    <button class="btn btn-secondary" id="singleNoPointsBtn">Skip / No Points</button>
                 </div>
             </div>
         </section>
@@ -235,9 +225,50 @@
                 </div>
                 <p class="question-text" id="modalQuestionText">Question goes here</p>
                 <div class="answers-grid" id="modalAnswersGrid"></div>
-                <div class="modal-actions">
+                <div class="modal-award-section hidden" id="modalAwardSection">
+                    <span class="award-label" id="modalAwardLabel">Award points to:</span>
+                    <div class="award-buttons" id="modalAwardButtons"></div>
+                    <button class="btn btn-secondary" id="modalNoPointsBtn">Skip / No Points</button>
+                </div>
+                <div class="modal-actions" id="modalCloseSection">
                     <button class="btn btn-secondary" id="closeModalBtn">Close</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Add Question Modal -->
+        <div class="modal-overlay hidden" id="addQuestionModal" role="dialog" aria-modal="true" aria-labelledby="addQuestionTitle">
+            <div class="modal-content add-question-modal">
+                <h2 id="addQuestionTitle">Add Question</h2>
+                <form id="addQuestionForm">
+                    <div class="form-group">
+                        <label for="newCategory">Category</label>
+                        <input type="text" id="newCategory" required placeholder="e.g., Science">
+                    </div>
+                    <div class="form-group">
+                        <label for="newDifficulty">Difficulty</label>
+                        <select id="newDifficulty" required>
+                            <option value="L1">L1 (Easy)</option>
+                            <option value="L2">L2 (Hard)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="newQuestion">Question</label>
+                        <textarea id="newQuestion" required placeholder="Enter your question..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="newAnswers">Correct Answer(s) <small>(comma-separated)</small></label>
+                        <input type="text" id="newAnswers" required placeholder="e.g., Paris, paris">
+                    </div>
+                    <div class="form-group">
+                        <label for="newIncorrect">Incorrect Answers <small>(3-7, comma-separated)</small></label>
+                        <input type="text" id="newIncorrect" required placeholder="e.g., London, Berlin, Madrid, Rome, Vienna, Amsterdam, Brussels">
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn btn-primary">Add Question</button>
+                        <button type="button" class="btn btn-secondary" id="closeAddQuestionBtn">Cancel</button>
+                    </div>
+                </form>
             </div>
         </div>
     </main>
