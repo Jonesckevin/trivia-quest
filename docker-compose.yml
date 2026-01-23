@@ -6,10 +6,15 @@ services:
       - "8286:80"
     environment:
       - APP_TITLE=Trivia Quest
+      # Security settings
+      - ALLOWED_ORIGINS=*
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/", "&&", "wget", "-q", "--spider", "http://localhost/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 10s
+    # Optional: Mount custom question bank for updates without rebuild
+    # volumes:
+    #   - ./question_bank:/question_bank:ro

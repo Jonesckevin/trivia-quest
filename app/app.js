@@ -15,7 +15,7 @@ let state = {
     jeopardyRows: 5,
     maxAvailableRows: 5,
     pointLabel: '',
-    pointImageUrl: '',
+    pointImageUrl: 'logo.svg',
     pointImageMode: 'none', // 'none', 'replace', 'fullcell'
     answerDifficulty: 'easy', // 'easy' (3 wrong), 'medium' (5 wrong), 'hard' (7 wrong)
     feedbackIntensity: 'full',
@@ -129,6 +129,7 @@ const elements = {
     exportBtn: document.getElementById('exportBtn'),
     addQuestionForm: document.getElementById('addQuestionForm'),
     resetBtn: document.getElementById('resetBtn'),
+    resetScoresBtn: document.getElementById('resetScoresBtn'),
     
     // Question counter
     questionCounter: document.getElementById('questionCounter'),
@@ -160,6 +161,16 @@ const elements = {
     addQuestionModal: document.getElementById('addQuestionModal'),
     openAddQuestionBtn: document.getElementById('openAddQuestionBtn'),
     closeAddQuestionBtn: document.getElementById('closeAddQuestionBtn'),
+    
+    // Categories Modal (Server Questions)
+    categoriesModal: document.getElementById('categoriesModal'),
+    browseServerBtn: document.getElementById('browseServerBtn'),
+    closeCategoriesBtn: document.getElementById('closeCategoriesBtn'),
+    categoriesLoading: document.getElementById('categoriesLoading'),
+    categoriesError: document.getElementById('categoriesError'),
+    categoriesList: document.getElementById('categoriesList'),
+    serverStats: document.getElementById('serverStats'),
+    retryLoadCategories: document.getElementById('retryLoadCategories'),
     
     // Scoreboard
     scoreboard: document.getElementById('scoreboard'),
@@ -832,6 +843,7 @@ function buildJeopardyBoard() {
         categoryNames.forEach((cat, colIndex) => {
             const cell = document.createElement('div');
             cell.className = 'jeopardy-cell value-cell';
+            cell.dataset.category = cat; // Store category for reference
             
             const categoryQuestions = shuffledCategories[cat];
             
@@ -840,18 +852,23 @@ function buildJeopardyBoard() {
                 cell.dataset.questionIndex = questionData.index;
                 cell.dataset.points = points;
                 
+                // Get the question's subcategory if different from column category
+                const qCategory = questionData.question.Category;
+                const showSubcategory = qCategory !== cat;
+                const categoryLabel = showSubcategory ? `<span class="cell-category-label">${qCategory}</span>` : '';
+                
                 // Apply custom point display based on settings
                 if (state.pointImageMode === 'fullcell' && state.pointImageUrl) {
                     // Full cell background image
                     cell.classList.add('image-fullcell');
                     cell.style.backgroundImage = `url('${state.pointImageUrl}')`;
-                    cell.innerHTML = `<span class="cell-points-overlay">${formatPointDisplay(points)}</span>`;
+                    cell.innerHTML = `${categoryLabel}<span class="cell-points-overlay">${formatPointDisplay(points)}</span>`;
                 } else if (state.pointImageMode === 'replace' && state.pointImageUrl) {
                     // Image replaces text
-                    cell.innerHTML = `<img src="${state.pointImageUrl}" alt="${points}" class="cell-point-image"><span class="cell-points-small">${points}</span>`;
+                    cell.innerHTML = `${categoryLabel}<img src="${state.pointImageUrl}" alt="${points}" class="cell-point-image"><span class="cell-points-small">${points}</span>`;
                 } else {
                     // Text only (default or custom label)
-                    cell.textContent = formatPointDisplay(points);
+                    cell.innerHTML = `${categoryLabel}<span class="cell-points-text">${formatPointDisplay(points)}</span>`;
                 }
                 
                 if (state.usedQuestions.has(questionData.index)) {
@@ -902,6 +919,19 @@ function closeModal() {
 }
 
 // ==================== IMPORT/EXPORT ====================
+// Generate a unique ID for a question based on its content
+function generateQuestionId(q) {
+    // Create a hash from category + question text for deduplication
+    const content = `${q.Category || ''}|${q.Question || ''}`;
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+        const char = content.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return `q_${Math.abs(hash).toString(36)}`;
+}
+
 function cleanValue(val) {
     if (typeof val === 'string') {
         // Remove Excel-style ="..." wrapping
@@ -917,29 +947,46 @@ function cleanValue(val) {
 }
 
 function cleanQuestion(q) {
-    return {
+    const cleaned = {
         Category: cleanValue(q.Category || ''),
         Difficulty: cleanValue(q.Difficulty || 'L1'),
         Question: cleanValue(q.Question || ''),
         Answers: (q.Answers || []).map(a => cleanValue(a)),
         IncorrectAnswers: (q.IncorrectAnswers || []).map(a => cleanValue(a))
     };
+    // Add or preserve ID for deduplication
+    cleaned.id = q.id || generateQuestionId(cleaned);
+    return cleaned;
 }
 
-function parseJSONL(text) {
+function parseJSONL(text, existingIds = new Set()) {
     const lines = text.trim().split('\n');
     const questions = [];
+    let duplicatesSkipped = 0;
     
     lines.forEach(line => {
         try {
             if (line.trim()) {
                 const parsed = JSON.parse(line);
-                questions.push(cleanQuestion(parsed));
+                const cleaned = cleanQuestion(parsed);
+                
+                // Skip if this question ID already exists
+                if (existingIds.has(cleaned.id)) {
+                    duplicatesSkipped++;
+                    return;
+                }
+                
+                existingIds.add(cleaned.id);
+                questions.push(cleaned);
             }
         } catch (e) {
             console.warn('Failed to parse line:', line, e);
         }
     });
+    
+    if (duplicatesSkipped > 0) {
+        console.log(`Skipped ${duplicatesSkipped} duplicate questions`);
+    }
     
     return questions;
 }
@@ -975,10 +1022,12 @@ function importFromFile(file) {
                 return;
             }
             
-            const questions = parseJSONL(content);
+            // Build set of existing question IDs for deduplication
+            const existingIds = new Set(state.questions.map(q => q.id).filter(id => id));
+            const questions = parseJSONL(content, existingIds);
             
             if (questions.length === 0) {
-                showError('Import Error', 'No valid questions found in the file. Please check the JSONL format.');
+                showError('Import Error', 'No valid questions found in the file (or all were duplicates). Please check the JSONL format.');
                 return;
             }
             
@@ -1016,14 +1065,268 @@ function importFromFile(file) {
 }
 
 function loadSampleQuestions() {
-    state.questions = [...sampleQuestions];
+    // Clean sample questions and add IDs
+    const cleanedSamples = sampleQuestions.map(q => cleanQuestion(q));
+    
+    // Build existing IDs for deduplication
+    const existingIds = new Set(state.questions.map(q => q.id).filter(id => id));
+    
+    // Filter out duplicates
+    const newQuestions = cleanedSamples.filter(q => {
+        if (existingIds.has(q.id)) {
+            return false;
+        }
+        existingIds.add(q.id);
+        return true;
+    });
+    
+    if (newQuestions.length === 0) {
+        alert('Sample questions are already loaded!');
+        return;
+    }
+    
+    state.questions = [...state.questions, ...newQuestions];
     state.usedQuestions.clear();
     updateQuestionCounter();
     if (state.gameMode === 'jeopardy') {
         buildJeopardyBoard();
     }
     saveState();
-    alert('Loaded 16 sample questions!');
+    alert(`Loaded ${newQuestions.length} sample questions!`);
+}
+
+// ==================== SERVER CATEGORIES ====================
+const API_BASE = '/api';
+
+async function openCategoriesModal() {
+    elements.categoriesModal.classList.remove('hidden');
+    await loadServerCategories();
+}
+
+function closeCategoriesModal() {
+    elements.categoriesModal.classList.add('hidden');
+}
+
+async function loadServerCategories() {
+    // Show loading state
+    elements.categoriesLoading.classList.remove('hidden');
+    elements.categoriesError.classList.add('hidden');
+    elements.categoriesList.classList.add('hidden');
+    
+    try {
+        const response = await fetch(`${API_BASE}/categories`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to load categories');
+        }
+        
+        // Hide loading, show categories
+        elements.categoriesLoading.classList.add('hidden');
+        elements.categoriesList.classList.remove('hidden');
+        
+        // Render categories
+        renderCategories(data.categories);
+        
+        // Load and show stats
+        await loadServerStats();
+        
+    } catch (error) {
+        console.error('Failed to load categories:', error);
+        elements.categoriesLoading.classList.add('hidden');
+        elements.categoriesError.classList.remove('hidden');
+        elements.categoriesError.querySelector('.error-message').textContent = 
+            error.message || 'Failed to load categories. Make sure you are using the Docker deployment.';
+    }
+}
+
+function renderCategories(categories) {
+    elements.categoriesList.innerHTML = '';
+    
+    if (categories.length === 0) {
+        elements.categoriesList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">📭</div>
+                <div class="empty-state-title">No Categories Available</div>
+                <div class="empty-state-text">No question categories found on the server.</div>
+            </div>
+        `;
+        return;
+    }
+    
+    categories.forEach(category => {
+        const card = document.createElement('div');
+        card.className = 'category-card';
+        card.innerHTML = `
+            <div class="category-header">
+                <h3 class="category-name">${escapeHtml(category.name)}</h3>
+                <span class="category-count">${category.questionCount} questions</span>
+            </div>
+            ${category.subcategories.length > 0 ? `
+                <div class="category-subcategories">
+                    ${category.subcategories.slice(0, 8).map(sub => 
+                        `<span class="subcategory-tag">${escapeHtml(sub.name)} (${sub.count})</span>`
+                    ).join('')}
+                    ${category.subcategories.length > 8 ? `<span class="subcategory-tag">+${category.subcategories.length - 8} more</span>` : ''}
+                </div>
+            ` : ''}
+            <div class="category-actions">
+                <button class="btn btn-secondary btn-small" onclick="previewCategory(${category.id}, '${escapeHtml(category.name)}')">Preview</button>
+                <button class="btn btn-primary btn-small" onclick="importCategory(${category.id}, '${escapeHtml(category.name)}')">Import All</button>
+            </div>
+        `;
+        elements.categoriesList.appendChild(card);
+    });
+}
+
+async function loadServerStats() {
+    try {
+        const response = await fetch(`${API_BASE}/stats`);
+        const data = await response.json();
+        
+        if (data.success) {
+            elements.serverStats.innerHTML = `
+                <div class="stat-item">
+                    <span>Categories:</span>
+                    <span class="stat-value">${data.stats.totalCategories}</span>
+                </div>
+                <div class="stat-item">
+                    <span>Total Questions:</span>
+                    <span class="stat-value">${data.stats.totalQuestions}</span>
+                </div>
+                <div class="stat-item">
+                    <span>L1:</span>
+                    <span class="stat-value">${data.stats.difficulties.L1 || 0}</span>
+                </div>
+                <div class="stat-item">
+                    <span>L2:</span>
+                    <span class="stat-value">${data.stats.difficulties.L2 || 0}</span>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.warn('Failed to load server stats:', error);
+    }
+}
+
+async function previewCategory(categoryId, categoryName) {
+    try {
+        const response = await fetch(`${API_BASE}/categories/${categoryId}/questions?limit=5`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error);
+        }
+        
+        const previewText = data.questions.slice(0, 5).map((q, i) => 
+            `${i + 1}. ${q.Question.substring(0, 100)}${q.Question.length > 100 ? '...' : ''}`
+        ).join('\n');
+        
+        alert(`Preview of "${categoryName}" (${data.count} questions):\n\n${previewText}\n\n...and ${Math.max(0, data.count - 5)} more questions.`);
+        
+    } catch (error) {
+        showError('Preview Error', error.message || 'Failed to preview category');
+    }
+}
+
+async function importCategory(categoryId, categoryName) {
+    const card = event.target.closest('.category-card');
+    const actionsDiv = card.querySelector('.category-actions');
+    
+    // Show loading state
+    const originalContent = actionsDiv.innerHTML;
+    actionsDiv.innerHTML = `
+        <div class="import-progress">
+            <div class="loading-spinner"></div>
+            <span class="import-progress-text">Importing...</span>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch(`${API_BASE}/categories/${categoryId}/questions`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error);
+        }
+        
+        if (data.questions.length === 0) {
+            throw new Error('No questions found in this category');
+        }
+        
+        // Build set of existing question IDs for deduplication
+        const existingIds = new Set(state.questions.map(q => q.id).filter(id => id));
+        
+        // Clean and deduplicate incoming questions
+        let duplicatesSkipped = 0;
+        const newQuestions = data.questions.filter(q => {
+            const cleaned = cleanQuestion(q);
+            if (existingIds.has(cleaned.id)) {
+                duplicatesSkipped++;
+                return false;
+            }
+            existingIds.add(cleaned.id);
+            // Update the question with the cleaned version including id
+            Object.assign(q, cleaned);
+            return true;
+        });
+        
+        if (newQuestions.length === 0) {
+            throw new Error('All questions in this category are already imported');
+        }
+        
+        // Add questions to state
+        state.questions = [...state.questions, ...newQuestions];
+        state.usedQuestions.clear();
+        
+        // Recalculate max rows
+        const categories = {};
+        state.questions.forEach(q => {
+            if (!categories[q.Category]) categories[q.Category] = 0;
+            categories[q.Category]++;
+        });
+        const maxRows = Math.max(...Object.values(categories));
+        if (elements.jeopardyRows) {
+            elements.jeopardyRows.max = maxRows;
+            if (state.jeopardyRows >= state.maxAvailableRows || !state.maxAvailableRows) {
+                state.jeopardyRows = maxRows;
+                elements.jeopardyRows.value = maxRows;
+            }
+        }
+        
+        updateQuestionCounter();
+        if (state.gameMode === 'jeopardy') {
+            buildJeopardyBoard();
+        }
+        saveState();
+        
+        // Show success
+        actionsDiv.innerHTML = `
+            <span style="color: var(--success); font-size: 0.75rem;">✓ Imported ${data.count} questions!</span>
+        `;
+        
+        // Restore buttons after delay
+        setTimeout(() => {
+            actionsDiv.innerHTML = originalContent;
+        }, 3000);
+        
+    } catch (error) {
+        console.error('Import error:', error);
+        actionsDiv.innerHTML = originalContent;
+        showError('Import Error', error.message || 'Failed to import category');
+    }
+}
+
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // ==================== ADD QUESTION ====================
@@ -1087,7 +1390,7 @@ function resetAll() {
         jeopardyRows: 5,
         maxAvailableRows: 5,
         pointLabel: '',
-        pointImageUrl: '',
+        pointImageUrl: 'logo.svg',
         pointImageMode: 'none',
         answerDifficulty: 'easy',
         feedbackIntensity: 'full',
@@ -1120,6 +1423,19 @@ function resetAll() {
     elements.skipQuestionBtn.disabled = true;
     
     alert('All data has been reset!');
+}
+
+function resetScores() {
+    if (!confirm('Reset all team scores to 0?')) {
+        return;
+    }
+    
+    for (let i = 0; i < state.teams.length; i++) {
+        state.teams[i].score = 0;
+    }
+    
+    updateScoreboard();
+    saveState();
 }
 
 // ==================== GAME MODE ====================
@@ -1325,6 +1641,16 @@ function initEventListeners() {
     // Question management
     elements.loadSampleBtn.addEventListener('click', loadSampleQuestions);
     
+    // Server Categories Modal
+    elements.browseServerBtn.addEventListener('click', openCategoriesModal);
+    elements.closeCategoriesBtn.addEventListener('click', closeCategoriesModal);
+    elements.retryLoadCategories.addEventListener('click', loadServerCategories);
+    elements.categoriesModal.addEventListener('click', (e) => {
+        if (e.target === elements.categoriesModal) {
+            closeCategoriesModal();
+        }
+    });
+    
     elements.importBtn.addEventListener('click', () => {
         elements.importFile.click();
     });
@@ -1350,6 +1676,7 @@ function initEventListeners() {
     elements.addQuestionForm.addEventListener('submit', addQuestion);
     
     elements.resetBtn.addEventListener('click', resetAll);
+    elements.resetScoresBtn.addEventListener('click', resetScores);
     
     // Single mode controls
     elements.nextQuestionBtn.addEventListener('click', nextQuestion);

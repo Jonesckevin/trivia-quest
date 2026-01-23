@@ -99,7 +99,8 @@
                     </div>
                     <div class="form-group">
                         <label for="pointImageUrl">Custom Point Image URL</label>
-                        <input type="text" id="pointImageUrl" value="" placeholder="https://... or leave empty">
+                        <input type="text" id="pointImageUrl" value="logo.svg" placeholder="logo.svg (default)">
+                        <small>Default: logo.svg - Change image mode to use</small>
                     </div>
                     <div class="form-group">
                         <label for="pointImageMode">Image Display Mode</label>
@@ -156,6 +157,7 @@
                 <div class="section-content">
                     <div class="button-group">
                         <button class="btn btn-accent" id="loadSampleBtn">Load Sample Questions</button>
+                        <button class="btn btn-primary" id="browseServerBtn">📚 Browse Server Categories</button>
                         <button class="btn btn-secondary" id="importBtn">Import JSONL</button>
                         <button class="btn btn-secondary" id="exportBtn">Export JSONL</button>
                     </div>
@@ -168,7 +170,10 @@
             <section class="control-section" data-section="reset">
                 <h3>Reset</h3>
                 <div class="section-content">
-                    <button class="btn btn-danger" id="resetBtn">Reset All Data</button>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn btn-warning" id="resetScoresBtn" style="flex: 1;">Reset Scores</button>
+                        <button class="btn btn-danger" id="resetBtn" style="flex: 1;">Reset All Data</button>
+                    </div>
                 </div>
             </section>
         </div>
@@ -269,6 +274,31 @@
                         <button type="button" class="btn btn-secondary" id="closeAddQuestionBtn">Cancel</button>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <!-- Server Categories Modal -->
+        <div class="modal-overlay hidden" id="categoriesModal" role="dialog" aria-modal="true" aria-labelledby="categoriesModalTitle">
+            <div class="modal-content categories-modal">
+                <div class="modal-header">
+                    <h2 id="categoriesModalTitle">📚 Server Question Categories</h2>
+                    <button class="btn btn-secondary btn-icon" id="closeCategoriesBtn" aria-label="Close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="categoriesLoading" class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>Loading categories...</p>
+                    </div>
+                    <div id="categoriesError" class="error-state hidden">
+                        <p class="error-icon">⚠️</p>
+                        <p class="error-message">Failed to load categories</p>
+                        <button class="btn btn-secondary" id="retryLoadCategories">Retry</button>
+                    </div>
+                    <div id="categoriesList" class="categories-list hidden"></div>
+                </div>
+                <div class="modal-footer">
+                    <div class="server-stats" id="serverStats"></div>
+                </div>
             </div>
         </div>
     </main>
