@@ -4,17 +4,15 @@
 
 ## About
 
-A simple trivia quiz web application built with modern web technologies.
+A trivia quiz web application.
 
 ## Getting Started
 
-Works Offline, python local server, docker.
-
-1. Clone the repository
-2. Open `index.html` in your browser
-3. Start answering questions!
-
 ### Docker Build
+
+To add new question categories or banks to the database, you only need to create/add a new JSONL to question_bank/ and run the build command. The files in the question bank are imported on docker build. 
+
+If you need a template, just add any question from the WebApp and export it to get the format.
 
 ```bash
 docker compose up -d --build
@@ -25,3 +23,15 @@ docker compose up -d --build
 ```bash
 python -m http.server 8000
 ```
+Then open your browser to http://localhost:8000/
+
+Or 
+
+```powershell
+.\start_server.ps1
+```
+```bash
+bash .\start_server.sh
+```
+Then open your browser to http://localhost:8080/
+
