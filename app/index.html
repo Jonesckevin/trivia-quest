@@ -40,7 +40,7 @@
             </section>
 
             <!-- Team Setup -->
-            <section class="control-section" data-section="teams">
+            <section class="control-section collapsed" data-section="teams">
                 <h3>Teams</h3>
                 <div class="section-content">
                     <div class="form-group">
@@ -65,7 +65,7 @@
                 <div class="section-content">
                     <div class="form-group">
                         <label class="checkbox-label">
-                            <input type="checkbox" id="usePointValues" checked>
+                            <input type="checkbox" id="usePointValues">
                             Use difficulty-based points
                         </label>
                     </div>
@@ -83,7 +83,7 @@
             </section>
 
             <!-- Jeopardy Board Settings -->
-            <section class="control-section" data-section="jeopardy-board">
+            <section class="control-section collapsed" data-section="jeopardy-board">
                 <h3>Jeopardy Board</h3>
                 <div class="section-content">
                     <div class="form-group">
@@ -120,7 +120,7 @@
             </section>
 
             <!-- Feedback & Sound -->
-            <section class="control-section" data-section="effects">
+            <section class="control-section collapsed" data-section="effects">
                 <h3>Effects</h3>
                 <div class="section-content">
                     <div class="form-group">
@@ -131,6 +131,14 @@
                             <option value="hard">Hard (8 choices)</option>
                         </select>
                         <small>Controls how many answer options are shown</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="questionOrder">Question Order</label>
+                        <select id="questionOrder">
+                            <option value="ordered" selected>Ordered (by import)</option>
+                            <option value="randomized">Randomized</option>
+                        </select>
+                        <small>Single: follows order. Jeopardy: category order</small>
                     </div>
                     <div class="form-group">
                         <label for="feedbackIntensity">Feedback Intensity</label>
@@ -170,10 +178,11 @@
             <section class="control-section" data-section="reset">
                 <h3>Reset</h3>
                 <div class="section-content">
-                    <div style="display: flex; gap: 0.5rem;">
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <button class="btn btn-info" id="resetQuestionsBtn" style="flex: 1;">Reset Questions</button>
                         <button class="btn btn-warning" id="resetScoresBtn" style="flex: 1;">Reset Scores</button>
-                        <button class="btn btn-danger" id="resetBtn" style="flex: 1;">Reset All Data</button>
                     </div>
+                    <button class="btn btn-danger" id="resetBtn" style="margin-top: 0.5rem; width: 100%;">Reset All Data</button>
                 </div>
             </section>
         </div>
@@ -244,36 +253,99 @@
         <!-- Add Question Modal -->
         <div class="modal-overlay hidden" id="addQuestionModal" role="dialog" aria-modal="true" aria-labelledby="addQuestionTitle">
             <div class="modal-content add-question-modal">
-                <h2 id="addQuestionTitle">Add Question</h2>
+                <div class="add-question-header">
+                    <h2 id="addQuestionTitle">Add Question</h2>
+                    <button type="button" class="btn btn-secondary btn-small" id="bulkAddBtn">📋 Bulk Add</button>
+                </div>
+                
+                <!-- Single Add Form -->
                 <form id="addQuestionForm">
-                    <div class="form-group">
-                        <label for="newCategory">Category</label>
-                        <input type="text" id="newCategory" required placeholder="e.g., Science">
-                    </div>
-                    <div class="form-group">
-                        <label for="newDifficulty">Difficulty</label>
-                        <select id="newDifficulty" required>
-                            <option value="L1">L1 (Easy)</option>
-                            <option value="L2">L2 (Hard)</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="newQuestion">Question</label>
-                        <textarea id="newQuestion" required placeholder="Enter your question..."></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="newAnswers">Correct Answer(s) <small>(comma-separated)</small></label>
-                        <input type="text" id="newAnswers" required placeholder="e.g., Paris, paris">
-                    </div>
-                    <div class="form-group">
-                        <label for="newIncorrect">Incorrect Answers <small>(3-7, comma-separated)</small></label>
-                        <input type="text" id="newIncorrect" required placeholder="e.g., London, Berlin, Madrid, Rome, Vienna, Amsterdam, Brussels">
-                    </div>
-                    <div class="modal-actions">
-                        <button type="submit" class="btn btn-primary">Add Question</button>
-                        <button type="button" class="btn btn-secondary" id="closeAddQuestionBtn">Cancel</button>
+                    <div id="singleAddForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="newCategory">Category</label>
+                                <input type="text" id="newCategory" required placeholder="e.g., Science">
+                            </div>
+                            <div class="form-group">
+                                <label for="newDifficulty">Difficulty</label>
+                                <select id="newDifficulty" required>
+                                    <option value="L1">L1 (Easy)</option>
+                                    <option value="L2">L2 (Hard)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="newType">Question Type</label>
+                            <select id="newType" required>
+                                <option value="general">General Question (text input)</option>
+                                <option value="multiple_choice" selected>Multiple Choice (1 correct answer)</option>
+                                <option value="multiple_answer">Multiple Answer (select all correct)</option>
+                                <option value="hidden">Hidden (reveal answer)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="newQuestion">Question</label>
+                            <textarea id="newQuestion" required placeholder="Enter your question..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="newDescription">Description / Notes <small>(optional)</small></label>
+                            <textarea id="newDescription" placeholder="Additional notes or context for this question..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="newAnswers">Correct Answer(s) <small>(comma-separated for multiple)</small></label>
+                            <input type="text" id="newAnswers" required placeholder="e.g., Paris, paris">
+                        </div>
+                        <div class="form-group" id="incorrectAnswersGroup">
+                            <label for="newIncorrect">Incorrect Answers <small>(3-7, comma-separated)</small></label>
+                            <input type="text" id="newIncorrect" placeholder="e.g., London, Berlin, Madrid, Rome, Vienna, Amsterdam, Brussels">
+                        </div>
+                        <div class="form-group hidden" id="regexGroup">
+                            <label for="newRegex">Regex Pattern</label>
+                            <div class="regex-template-row">
+                                <select id="regexTemplate">
+                                    <option value="">Custom pattern...</option>
+                                    <option value="number">Number (exact match)</option>
+                                    <option value="numberOrWord">Number or Word (e.g., 4 or four)</option>
+                                    <option value="year">Year (e.g., 1993)</option>
+                                    <option value="port">Port (optional "port" prefix)</option>
+                                    <option value="level">Level (optional "level" prefix)</option>
+                                    <option value="caseInsensitive">Case-insensitive match</option>
+                                    <option value="contains">Contains text</option>
+                                </select>
+                            </div>
+                            <input type="text" id="newRegex" placeholder="e.g., ^(4|four)$">
+                            <small>Pattern to validate user input (case-insensitive)</small>
+                        </div>
+                        <div class="form-group hidden" id="regexDescGroup">
+                            <label for="newRegexDescription">Regex Hint <small>(shown to user)</small></label>
+                            <input type="text" id="newRegexDescription" placeholder="e.g., Enter the number as a digit or word">
+                        </div>
+                        <div class="modal-actions">
+                            <button type="submit" class="btn btn-primary">Add Question</button>
+                            <button type="button" class="btn btn-secondary" id="closeAddQuestionBtn">Cancel</button>
+                        </div>
                     </div>
                 </form>
+                
+                <!-- Bulk Add Form -->
+                <div id="bulkAddForm" class="hidden">
+                    <div class="bulk-add-header">
+                        <span>Category</span>
+                        <span>Diff</span>
+                        <span>Type</span>
+                        <span>Question</span>
+                        <span>Correct Answers</span>
+                        <span>Incorrect Answers</span>
+                        <span></span>
+                    </div>
+                    <div id="bulkAddRows" class="bulk-add-rows"></div>
+                    <div class="bulk-add-actions">
+                        <button type="button" class="btn btn-secondary" id="addBulkRowBtn">+ Add Row</button>
+                        <button type="button" class="btn btn-primary" id="submitBulkBtn">Add All Questions</button>
+                        <button type="button" class="btn btn-secondary" id="closeAddQuestionBtn2" onclick="document.getElementById('addQuestionModal').classList.add('hidden')">Cancel</button>
+                    </div>
+                    <small class="bulk-hint">💡 Compact form for adding multiple questions quickly. Max 10 at a time.</small>
+                </div>
             </div>
         </div>
 

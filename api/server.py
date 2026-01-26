@@ -171,13 +171,18 @@ def get_category_questions(category_id):
         
         questions = []
         for row in cursor.fetchall():
-            questions.append({
+            question_obj = {
                 'Category': row['subcategory'] or cat_row['name'],
                 'Difficulty': row['difficulty'],
                 'Question': row['question'],
                 'Answers': json.loads(row['answers']),
-                'IncorrectAnswers': json.loads(row['incorrect_answers'])
-            })
+                'IncorrectAnswers': json.loads(row['incorrect_answers']),
+                'Type': row['question_type'] if 'question_type' in row.keys() else 'multiple_choice',
+                'Description': row['description'] if 'description' in row.keys() else '',
+                'RegEx': row['regex_pattern'] if 'regex_pattern' in row.keys() else '',
+                'RegExDescription': row['regex_description'] if 'regex_description' in row.keys() else ''
+            }
+            questions.append(question_obj)
         
         return jsonify({
             'success': True,

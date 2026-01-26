@@ -38,6 +38,10 @@ def create_database(db_path: str) -> sqlite3.Connection:
             question TEXT NOT NULL,
             answers TEXT NOT NULL,
             incorrect_answers TEXT NOT NULL,
+            question_type TEXT NOT NULL DEFAULT 'multiple_choice',
+            description TEXT,
+            regex_pattern TEXT,
+            regex_description TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (category_id) REFERENCES categories(id)
         );
@@ -45,6 +49,7 @@ def create_database(db_path: str) -> sqlite3.Connection:
         -- Create indexes for efficient querying
         CREATE INDEX IF NOT EXISTS idx_questions_category ON questions(category_id);
         CREATE INDEX IF NOT EXISTS idx_questions_difficulty ON questions(difficulty);
+        CREATE INDEX IF NOT EXISTS idx_questions_type ON questions(question_type);
         CREATE INDEX IF NOT EXISTS idx_questions_subcategory ON questions(subcategory);
     ''')
     
@@ -123,6 +128,19 @@ def import_questions(conn: sqlite3.Connection, question_bank_path: str):
             difficulty = q.get('Difficulty', 'L1')
             question_text = q.get('Question', '')
             
+            # Question type - default to multiple_choice
+            # Support both 'regex' (legacy) and 'general' (new) type names
+            question_type = q.get('Type', 'multiple_choice')
+            if question_type == 'regex':
+                question_type = 'general'  # Normalize legacy 'regex' to 'general'
+            if question_type not in ('multiple_choice', 'multiple_answer', 'hidden', 'general'):
+                question_type = 'multiple_choice'
+            
+            # Optional metadata fields
+            description = q.get('Description', '')
+            regex_pattern = q.get('RegEx', '')
+            regex_description = q.get('RegExDescription', '')
+            
             # Answers can be a list
             answers = q.get('Answers', [])
             if isinstance(answers, str):
@@ -138,9 +156,11 @@ def import_questions(conn: sqlite3.Connection, question_bank_path: str):
             if question_text:
                 cursor.execute('''
                     INSERT INTO questions 
-                    (category_id, subcategory, difficulty, question, answers, incorrect_answers)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (category_id, subcategory, difficulty, question_text, answers_json, incorrect_json))
+                    (category_id, subcategory, difficulty, question, answers, incorrect_answers,
+                     question_type, description, regex_pattern, regex_description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (category_id, subcategory, difficulty, question_text, answers_json, incorrect_json,
+                      question_type, description, regex_pattern, regex_description))
         
         # Update question count
         cursor.execute('''

@@ -9,7 +9,9 @@ let state = {
     teams: [{ name: 'Team 1', score: 0 }],
     teamCount: 1,
     gameMode: 'single', // 'single' or 'jeopardy'
-    usePointValues: true,
+    questionOrder: 'ordered', // 'ordered' or 'randomized'
+    nextQuestionId: 1, // Auto-incrementing question ID
+    usePointValues: false,
     l1Points: 100,
     l2Points: 200,
     jeopardyRows: 5,
@@ -20,27 +22,108 @@ let state = {
     answerDifficulty: 'easy', // 'easy' (3 wrong), 'medium' (5 wrong), 'hard' (7 wrong)
     feedbackIntensity: 'full',
     volume: 0.5, // 0 to 1 volume level
-    answerRevealed: false
+    answerRevealed: false,
+    presentationMode: false // Hide admin controls for participant view
 };
+
+// ==================== REGEX VALIDATION ====================
+const REGEX_TIMEOUT_MS = 100;
+
+// Common regex pattern templates for Add Question form
+const REGEX_TEMPLATES = {
+    number: { pattern: '^{value}$', description: 'Exact number match' },
+    numberOrWord: { pattern: '^({value}|{word})$', description: 'Accepts numeric or word form' },
+    year: { pattern: '^{value}$', description: 'Exact year match' },
+    port: { pattern: '^(port\\s*)?{value}$', description: 'Port number with optional "port" prefix' },
+    level: { pattern: '^(level\\s*)?{value}$', description: 'Level number with optional "level" prefix' },
+    acronym: { pattern: null, description: 'Auto-generated from answer with flexible spacing' },
+    caseInsensitive: { pattern: '^{value}$', description: 'Case-insensitive exact match' },
+    contains: { pattern: '.*{value}.*', description: 'Contains the value anywhere' }
+};
+
+/**
+ * Validate a regex pattern for safety and correctness
+ * @param {string} pattern - The regex pattern to validate
+ * @returns {{valid: boolean, error: string|null}}
+ */
+function validateRegexPattern(pattern) {
+    if (!pattern || typeof pattern !== 'string') {
+        return { valid: false, error: 'Pattern is empty or invalid' };
+    }
+    
+    // Check for potentially dangerous patterns (ReDoS)
+    const dangerousPatterns = [
+        /(\+|\*|\?)\1{2,}/,  // Multiple quantifiers
+        /\([^)]*(\+|\*)[^)]*\)\+/,  // Nested quantifiers
+        /(.+)\1+\+/,  // Backreference with quantifier
+    ];
+    
+    for (const danger of dangerousPatterns) {
+        if (danger.test(pattern)) {
+            return { valid: false, error: 'Pattern contains potentially unsafe constructs' };
+        }
+    }
+    
+    // Try to compile the regex
+    try {
+        new RegExp(pattern, 'i');
+        return { valid: true, error: null };
+    } catch (e) {
+        return { valid: false, error: `Invalid regex: ${e.message}` };
+    }
+}
+
+/**
+ * Validate user input against a regex pattern with timeout protection
+ * @param {string} input - User's answer input
+ * @param {string} pattern - Regex pattern to match against
+ * @param {number} timeoutMs - Maximum execution time in milliseconds
+ * @returns {Promise<{matched: boolean, error: string|null}>}
+ */
+async function validateRegexAnswer(input, pattern, timeoutMs = REGEX_TIMEOUT_MS) {
+    // First validate the pattern itself
+    const patternCheck = validateRegexPattern(pattern);
+    if (!patternCheck.valid) {
+        console.warn('Invalid regex pattern:', patternCheck.error);
+        return { matched: false, error: patternCheck.error };
+    }
+    
+    return new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+            console.warn('Regex validation timed out');
+            resolve({ matched: false, error: 'Validation timed out' });
+        }, timeoutMs);
+        
+        try {
+            const regex = new RegExp(pattern, 'i'); // Case-insensitive
+            const matched = regex.test(input.trim());
+            clearTimeout(timeoutId);
+            resolve({ matched, error: null });
+        } catch (e) {
+            clearTimeout(timeoutId);
+            resolve({ matched: false, error: e.message });
+        }
+    });
+}
 
 // ==================== SAMPLE QUESTIONS ====================
 const sampleQuestions = [
-    { Category: "Geography", Difficulty: "L1", Question: "What is the capital of France?", Answers: ["Paris"], IncorrectAnswers: ["London", "Berlin", "Madrid", "Rome", "Vienna", "Amsterdam", "Brussels"] },
-    { Category: "Geography", Difficulty: "L1", Question: "Which continent is Brazil located in?", Answers: ["South America"], IncorrectAnswers: ["Africa", "Europe", "Asia", "North America", "Australia", "Central America", "Antarctica"] },
-    { Category: "Geography", Difficulty: "L2", Question: "What is the smallest country in the world by area?", Answers: ["Vatican City"], IncorrectAnswers: ["Monaco", "San Marino", "Liechtenstein", "Malta", "Andorra", "Luxembourg", "Singapore"] },
-    { Category: "Geography", Difficulty: "L2", Question: "Which river is the longest in the world?", Answers: ["Nile", "Amazon"], IncorrectAnswers: ["Mississippi", "Yangtze", "Congo", "Ganges", "Danube", "Mekong", "Volga"] },
-    { Category: "Science", Difficulty: "L1", Question: "What planet is known as the Red Planet?", Answers: ["Mars"], IncorrectAnswers: ["Venus", "Jupiter", "Saturn", "Mercury", "Neptune", "Uranus", "Pluto"] },
-    { Category: "Science", Difficulty: "L1", Question: "What is the chemical symbol for water?", Answers: ["H2O"], IncorrectAnswers: ["CO2", "NaCl", "O2", "H2", "N2", "CH4", "NH3"] },
-    { Category: "Science", Difficulty: "L2", Question: "What is the hardest natural substance on Earth?", Answers: ["Diamond"], IncorrectAnswers: ["Titanium", "Quartz", "Graphene", "Tungsten", "Steel", "Obsidian", "Sapphire"] },
-    { Category: "Science", Difficulty: "L2", Question: "What is the speed of light in km/s (approximately)?", Answers: ["300,000", "300000"], IncorrectAnswers: ["150,000", "500,000", "1,000,000", "200,000", "400,000", "250,000", "350,000"] },
-    { Category: "History", Difficulty: "L1", Question: "In which year did World War II end?", Answers: ["1945"], IncorrectAnswers: ["1944", "1946", "1943", "1942", "1947", "1941", "1948"] },
-    { Category: "History", Difficulty: "L1", Question: "Who was the first President of the United States?", Answers: ["George Washington"], IncorrectAnswers: ["Abraham Lincoln", "Thomas Jefferson", "John Adams", "Benjamin Franklin", "James Madison", "Alexander Hamilton", "John Hancock"] },
-    { Category: "History", Difficulty: "L2", Question: "What ancient wonder was located in Alexandria, Egypt?", Answers: ["Lighthouse of Alexandria", "The Lighthouse"], IncorrectAnswers: ["Hanging Gardens", "Colossus of Rhodes", "Temple of Artemis", "Great Pyramid", "Statue of Zeus", "Mausoleum at Halicarnassus", "Library of Alexandria"] },
-    { Category: "History", Difficulty: "L2", Question: "Which empire was ruled by Genghis Khan?", Answers: ["Mongol Empire"], IncorrectAnswers: ["Ottoman Empire", "Roman Empire", "Persian Empire", "Byzantine Empire", "Mughal Empire", "Han Dynasty", "Qing Dynasty"] },
-    { Category: "Pop Culture", Difficulty: "L1", Question: "What is the name of Harry Potter's owl?", Answers: ["Hedwig"], IncorrectAnswers: ["Errol", "Pigwidgeon", "Scabbers", "Fawkes", "Crookshanks", "Nagini", "Buckbeak"] },
-    { Category: "Pop Culture", Difficulty: "L1", Question: "Which band performed 'Bohemian Rhapsody'?", Answers: ["Queen"], IncorrectAnswers: ["The Beatles", "Led Zeppelin", "Pink Floyd", "The Rolling Stones", "AC/DC", "Aerosmith", "Guns N' Roses"] },
-    { Category: "Pop Culture", Difficulty: "L2", Question: "What year was the first iPhone released?", Answers: ["2007"], IncorrectAnswers: ["2005", "2008", "2010", "2006", "2009", "2004", "2011"] },
-    { Category: "Pop Culture", Difficulty: "L2", Question: "In the movie 'The Matrix', what color pill does Neo take?", Answers: ["Red"], IncorrectAnswers: ["Blue", "Green", "Purple", "Yellow", "Orange", "White", "Black"] }
+    { Category: "Geography", Difficulty: "L1", Type: "multiple_choice", Question: "What is the capital of France?", Answers: ["Paris"], IncorrectAnswers: ["London", "Berlin", "Madrid", "Rome", "Vienna", "Amsterdam", "Brussels"] },
+    { Category: "Geography", Difficulty: "L1", Type: "multiple_choice", Question: "Which continent is Brazil located in?", Answers: ["South America"], IncorrectAnswers: ["Africa", "Europe", "Asia", "North America", "Australia", "Central America", "Antarctica"] },
+    { Category: "Geography", Difficulty: "L2", Type: "multiple_choice", Question: "What is the smallest country in the world by area?", Answers: ["Vatican City"], IncorrectAnswers: ["Monaco", "San Marino", "Liechtenstein", "Malta", "Andorra", "Luxembourg", "Singapore"] },
+    { Category: "Geography", Difficulty: "L2", Type: "multiple_answer", Question: "Which river is the longest in the world?", Answers: ["Nile", "Amazon"], IncorrectAnswers: ["Mississippi", "Yangtze", "Congo", "Ganges", "Danube", "Mekong", "Volga"] },
+    { Category: "Science", Difficulty: "L1", Type: "multiple_choice", Question: "What planet is known as the Red Planet?", Answers: ["Mars"], IncorrectAnswers: ["Venus", "Jupiter", "Saturn", "Mercury", "Neptune", "Uranus", "Pluto"] },
+    { Category: "Science", Difficulty: "L1", Type: "general", Question: "What is the chemical symbol for water?", Answers: ["H2O"], IncorrectAnswers: [], RegEx: "^h2o$", RegExDescription: "Enter the chemical formula" },
+    { Category: "Science", Difficulty: "L2", Type: "multiple_choice", Question: "What is the hardest natural substance on Earth?", Answers: ["Diamond"], IncorrectAnswers: ["Titanium", "Quartz", "Graphene", "Tungsten", "Steel", "Obsidian", "Sapphire"] },
+    { Category: "Science", Difficulty: "L2", Type: "general", Question: "What is the speed of light in km/s (approximately)?", Answers: ["300,000", "300000"], IncorrectAnswers: [], RegEx: "^300[,.]?000$", RegExDescription: "Enter the approximate value in km/s" },
+    { Category: "History", Difficulty: "L1", Type: "general", Question: "In which year did World War II end?", Answers: ["1945"], IncorrectAnswers: [], RegEx: "^1945$", RegExDescription: "Enter the year" },
+    { Category: "History", Difficulty: "L1", Type: "multiple_choice", Question: "Who was the first President of the United States?", Answers: ["George Washington"], IncorrectAnswers: ["Abraham Lincoln", "Thomas Jefferson", "John Adams", "Benjamin Franklin", "James Madison", "Alexander Hamilton", "John Hancock"] },
+    { Category: "History", Difficulty: "L2", Type: "multiple_answer", Question: "What ancient wonder was located in Alexandria, Egypt?", Answers: ["Lighthouse of Alexandria", "The Lighthouse"], IncorrectAnswers: ["Hanging Gardens", "Colossus of Rhodes", "Temple of Artemis", "Great Pyramid", "Statue of Zeus", "Mausoleum at Halicarnassus", "Library of Alexandria"] },
+    { Category: "History", Difficulty: "L2", Type: "multiple_choice", Question: "Which empire was ruled by Genghis Khan?", Answers: ["Mongol Empire"], IncorrectAnswers: ["Ottoman Empire", "Roman Empire", "Persian Empire", "Byzantine Empire", "Mughal Empire", "Han Dynasty", "Qing Dynasty"] },
+    { Category: "Pop Culture", Difficulty: "L1", Type: "multiple_choice", Question: "What is the name of Harry Potter's owl?", Answers: ["Hedwig"], IncorrectAnswers: ["Errol", "Pigwidgeon", "Scabbers", "Fawkes", "Crookshanks", "Nagini", "Buckbeak"] },
+    { Category: "Pop Culture", Difficulty: "L1", Type: "multiple_choice", Question: "Which band performed 'Bohemian Rhapsody'?", Answers: ["Queen"], IncorrectAnswers: ["The Beatles", "Led Zeppelin", "Pink Floyd", "The Rolling Stones", "AC/DC", "Aerosmith", "Guns N' Roses"] },
+    { Category: "Pop Culture", Difficulty: "L2", Type: "general", Question: "What year was the first iPhone released?", Answers: ["2007"], IncorrectAnswers: [], RegEx: "^2007$", RegExDescription: "Enter the year" },
+    { Category: "Pop Culture", Difficulty: "L2", Type: "hidden", Question: "In the movie 'The Matrix', what color pill does Neo take?", Answers: ["Red"], IncorrectAnswers: [], Description: "The red pill represents truth and freedom from the simulation" }
 ];
 
 // ==================== AUDIO ====================
@@ -112,6 +195,7 @@ const elements = {
     volumeIcon: document.getElementById('volumeIcon'),
     volumeLabel: document.getElementById('volumeLabel'),
     answerDifficulty: document.getElementById('answerDifficulty'),
+    questionOrder: document.getElementById('questionOrder'),
     
     // Jeopardy settings
     jeopardyRows: document.getElementById('jeopardyRows'),
@@ -130,6 +214,7 @@ const elements = {
     addQuestionForm: document.getElementById('addQuestionForm'),
     resetBtn: document.getElementById('resetBtn'),
     resetScoresBtn: document.getElementById('resetScoresBtn'),
+    resetQuestionsBtn: document.getElementById('resetQuestionsBtn'),
     
     // Question counter
     questionCounter: document.getElementById('questionCounter'),
@@ -161,6 +246,20 @@ const elements = {
     addQuestionModal: document.getElementById('addQuestionModal'),
     openAddQuestionBtn: document.getElementById('openAddQuestionBtn'),
     closeAddQuestionBtn: document.getElementById('closeAddQuestionBtn'),
+    bulkAddBtn: document.getElementById('bulkAddBtn'),
+    singleAddForm: document.getElementById('singleAddForm'),
+    bulkAddForm: document.getElementById('bulkAddForm'),
+    bulkAddRows: document.getElementById('bulkAddRows'),
+    addBulkRowBtn: document.getElementById('addBulkRowBtn'),
+    submitBulkBtn: document.getElementById('submitBulkBtn'),
+    newType: document.getElementById('newType'),
+    newDescription: document.getElementById('newDescription'),
+    newRegex: document.getElementById('newRegex'),
+    newRegexDescription: document.getElementById('newRegexDescription'),
+    regexTemplate: document.getElementById('regexTemplate'),
+    regexGroup: document.getElementById('regexGroup'),
+    regexDescGroup: document.getElementById('regexDescGroup'),
+    incorrectAnswersGroup: document.getElementById('incorrectAnswersGroup'),
     
     // Categories Modal (Server Questions)
     categoriesModal: document.getElementById('categoriesModal'),
@@ -203,7 +302,10 @@ function loadState() {
         const parsed = JSON.parse(saved);
         state = {
             ...parsed,
-            usedQuestions: new Set(parsed.usedQuestions || [])
+            usedQuestions: new Set(parsed.usedQuestions || []),
+            // Ensure new fields have defaults for older saved states
+            questionOrder: parsed.questionOrder || 'ordered',
+            nextQuestionId: parsed.nextQuestionId || (parsed.questions?.length || 0) + 1
         };
         return true;
     }
@@ -214,6 +316,29 @@ function loadState() {
 function updateQuestionCounter() {
     const remaining = state.questions.length - state.usedQuestions.size;
     elements.remainingCount.textContent = remaining;
+}
+
+// Recalculate max rows based on current questions
+function recalculateMaxRows() {
+    const categories = {};
+    state.questions.forEach(q => {
+        if (!categories[q.Category]) categories[q.Category] = 0;
+        categories[q.Category]++;
+    });
+    const maxRows = state.questions.length > 0 ? Math.max(...Object.values(categories)) : 0;
+    
+    if (elements.jeopardyRows) {
+        elements.jeopardyRows.max = maxRows || 1;
+        // If we're at the previous max or if this is the first question, expand to new max
+        if (state.jeopardyRows >= state.maxAvailableRows || !state.maxAvailableRows || state.jeopardyRows < 1) {
+            state.jeopardyRows = maxRows;
+            elements.jeopardyRows.value = maxRows;
+        }
+        state.maxAvailableRows = maxRows;
+    }
+    if (elements.maxRowsInfo) {
+        elements.maxRowsInfo.textContent = `(max: ${maxRows})`;
+    }
 }
 
 // Update volume slider UI
@@ -461,11 +586,18 @@ function awardPointsToTeam(teamIndex) {
 
 function skipAward() {
     hideAwardButtons();
+    saveState();
     proceedAfterAward();
 }
 
 function proceedAfterAward() {
     if (state.gameMode === 'jeopardy') {
+        // Remove ALL descriptions (may be in answersGrid or parent container)
+        const parentContainer = elements.modalAnswersGrid.parentElement;
+        if (parentContainer) {
+            parentContainer.querySelectorAll('.answer-description').forEach(el => el.remove());
+        }
+        elements.modalAnswersGrid.querySelectorAll('.answer-description').forEach(el => el.remove());
         // Close modal and return to board
         elements.questionModal.classList.add('hidden');
         state.answerRevealed = false;
@@ -497,8 +629,21 @@ function getRandomUnusedQuestion() {
     
     if (unusedIndices.length === 0) return null;
     
-    const randomIndex = unusedIndices[Math.floor(Math.random() * unusedIndices.length)];
-    return { question: state.questions[randomIndex], index: randomIndex };
+    if (state.questionOrder === 'ordered') {
+        // Sort unused indices by question ID (ascending order)
+        unusedIndices.sort((a, b) => {
+            const idA = state.questions[a].QuestionId || a;
+            const idB = state.questions[b].QuestionId || b;
+            return idA - idB;
+        });
+        // Return the first (lowest ID) unused question
+        const nextIndex = unusedIndices[0];
+        return { question: state.questions[nextIndex], index: nextIndex };
+    } else {
+        // Randomized mode - pick random unused question
+        const randomIndex = unusedIndices[Math.floor(Math.random() * unusedIndices.length)];
+        return { question: state.questions[randomIndex], index: randomIndex };
+    }
 }
 
 function displayQuestion(question, index, isModal = false) {
@@ -512,6 +657,12 @@ function displayQuestion(question, index, isModal = false) {
     const pointsEl = isModal ? elements.modalPoints : elements.currentPoints;
     const questionEl = isModal ? elements.modalQuestionText : elements.questionText;
     const answersEl = isModal ? elements.modalAnswersGrid : elements.answersGrid;
+    
+    // Remove any existing descriptions from previous question (may be outside answersEl)
+    const parentContainer = answersEl.parentElement;
+    if (parentContainer) {
+        parentContainer.querySelectorAll('.answer-description').forEach(el => el.remove());
+    }
     
     categoryEl.textContent = question.Category;
     difficultyEl.textContent = question.Difficulty;
@@ -531,7 +682,42 @@ function displayQuestion(question, index, isModal = false) {
     
     questionEl.textContent = question.Question;
     
-    // Determine how many incorrect answers to show based on difficulty
+    // Get question type - default to multiple_choice if not specified
+    // Note: 'general' is the new name for 'regex' type, support both for backwards compatibility
+    let questionType = question.Type || 'multiple_choice';
+    if (questionType === 'regex') {
+        questionType = 'general'; // Normalize old 'regex' type to 'general'
+    }
+    
+    answersEl.innerHTML = '';
+    answersEl.classList.remove('many-answers', 'hidden-type', 'general-type');
+    
+    // Render based on question type
+    switch (questionType) {
+        case 'hidden':
+            renderHiddenQuestion(question, answersEl);
+            break;
+        case 'general':
+            renderGeneralQuestion(question, answersEl);
+            break;
+        case 'multiple_answer':
+            renderMultipleAnswerQuestion(question, answersEl);
+            break;
+        case 'multiple_choice':
+        default:
+            renderMultipleChoiceQuestion(question, answersEl);
+            break;
+    }
+    
+    if (!isModal) {
+        elements.skipQuestionBtn.disabled = false;
+    }
+}
+
+// ==================== QUESTION TYPE RENDERERS ====================
+
+function renderMultipleChoiceQuestion(question, answersEl) {
+    // Determine how many incorrect answers to show based on difficulty (default 3)
     const incorrectCountMap = { easy: 3, medium: 5, hard: 7 };
     const maxIncorrect = incorrectCountMap[state.answerDifficulty] || 3;
     
@@ -539,28 +725,46 @@ function displayQuestion(question, index, isModal = false) {
     const availableIncorrect = question.IncorrectAnswers || [];
     const incorrectToShow = shuffleArray([...availableIncorrect]).slice(0, maxIncorrect);
     
-    // Combine correct answer(s) with selected incorrect answers
+    // Use only the first correct answer for multiple_choice
+    const correctAnswer = question.Answers[0];
+    const allAnswers = [correctAnswer, ...incorrectToShow];
+    const shuffledAnswers = shuffleArray(allAnswers);
+    
+    if (shuffledAnswers.length > 4) {
+        answersEl.classList.add('many-answers');
+    }
+    
+    shuffledAnswers.forEach(answer => {
+        const btn = document.createElement('button');
+        btn.className = 'answer-btn';
+        btn.textContent = answer;
+        btn.dataset.correct = (answer.toLowerCase() === correctAnswer.toLowerCase()).toString();
+        btn.addEventListener('click', () => revealAnswer(btn, answersEl));
+        answersEl.appendChild(btn);
+    });
+}
+
+function renderMultipleAnswerQuestion(question, answersEl) {
+    // Determine how many incorrect answers to show based on difficulty
+    const incorrectCountMap = { easy: 3, medium: 5, hard: 7 };
+    const maxIncorrect = incorrectCountMap[state.answerDifficulty] || 3;
+    
+    const availableIncorrect = question.IncorrectAnswers || [];
+    const incorrectToShow = shuffleArray([...availableIncorrect]).slice(0, maxIncorrect);
+    
+    // Combine all correct answers with selected incorrect answers
     const allAnswers = [...question.Answers, ...incorrectToShow];
     const shuffledAnswers = shuffleArray(allAnswers);
     
-    answersEl.innerHTML = '';
-    // Add class for many answers layout
     if (shuffledAnswers.length > 4) {
         answersEl.classList.add('many-answers');
-    } else {
-        answersEl.classList.remove('many-answers');
     }
     
-    // Check if this is a multi-select question (multiple correct answers)
-    const isMultiSelect = question.Answers.length > 1;
-    
-    if (isMultiSelect) {
-        // Add hint for multi-select
-        const hint = document.createElement('div');
-        hint.className = 'multi-select-hint';
-        hint.textContent = `Select all ${question.Answers.length} correct answers, then submit`;
-        answersEl.appendChild(hint);
-    }
+    // Add hint for multi-select
+    const hint = document.createElement('div');
+    hint.className = 'multi-select-hint';
+    hint.textContent = `Select all ${question.Answers.length} correct answers, then submit`;
+    answersEl.appendChild(hint);
     
     shuffledAnswers.forEach(answer => {
         const btn = document.createElement('button');
@@ -571,26 +775,223 @@ function displayQuestion(question, index, isModal = false) {
             a.toLowerCase() === answer.toLowerCase()
         );
         btn.dataset.correct = isCorrect;
-        
-        if (isMultiSelect) {
-            btn.addEventListener('click', () => toggleAnswerSelection(btn));
-        } else {
-            btn.addEventListener('click', () => revealAnswer(btn, answersEl));
-        }
+        btn.addEventListener('click', () => toggleAnswerSelection(btn));
         answersEl.appendChild(btn);
     });
     
-    // Add submit button for multi-select questions
-    if (isMultiSelect) {
-        const submitBtn = document.createElement('button');
-        submitBtn.className = 'submit-answers-btn';
-        submitBtn.textContent = 'Submit Answers';
-        submitBtn.addEventListener('click', () => submitMultiSelectAnswers(answersEl, question.Answers.length));
-        answersEl.appendChild(submitBtn);
+    // Add submit button
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'submit-answers-btn';
+    submitBtn.textContent = 'Submit Answers';
+    submitBtn.addEventListener('click', () => submitMultiSelectAnswers(answersEl, question.Answers.length));
+    answersEl.appendChild(submitBtn);
+}
+
+function renderHiddenQuestion(question, answersEl) {
+    answersEl.classList.add('hidden-type');
+    
+    // Create hidden answer container
+    const answerContainer = document.createElement('div');
+    answerContainer.className = 'hidden-answer-container';
+    
+    // Create spoiler blocks for each answer
+    const spoilerGrid = document.createElement('div');
+    spoilerGrid.className = 'spoiler-grid';
+    
+    question.Answers.forEach((answer, index) => {
+        const spoilerBlock = document.createElement('div');
+        spoilerBlock.className = 'spoiler-block';
+        spoilerBlock.setAttribute('data-index', index);
+        
+        const spoilerOverlay = document.createElement('div');
+        spoilerOverlay.className = 'spoiler-overlay';
+        spoilerOverlay.innerHTML = '<span class="spoiler-icon">🔒</span><span class="spoiler-hint">Click to reveal</span>';
+        
+        const spoilerContent = document.createElement('div');
+        spoilerContent.className = 'spoiler-content';
+        spoilerContent.textContent = answer;
+        
+        spoilerBlock.appendChild(spoilerOverlay);
+        spoilerBlock.appendChild(spoilerContent);
+        
+        // Click to reveal individual answer
+        spoilerBlock.addEventListener('click', () => {
+            if (!spoilerBlock.classList.contains('revealed')) {
+                spoilerBlock.classList.add('revealed');
+                playSound('reveal');
+            }
+        });
+        
+        spoilerGrid.appendChild(spoilerBlock);
+    });
+    
+    answerContainer.appendChild(spoilerGrid);
+    
+    // Create the reveal all button
+    const revealBtn = document.createElement('button');
+    revealBtn.className = 'answer-btn reveal-answer-btn';
+    revealBtn.textContent = '🔓 Reveal All Answers';
+    revealBtn.addEventListener('click', () => {
+        if (state.answerRevealed) return;
+        state.answerRevealed = true;
+        
+        // Reveal all spoiler blocks
+        const allSpoilers = spoilerGrid.querySelectorAll('.spoiler-block');
+        allSpoilers.forEach(block => block.classList.add('revealed'));
+        
+        revealBtn.classList.add('hidden');
+        
+        // Show description if available
+        if (question.Description) {
+            descEl.classList.remove('hidden');
+        }
+        
+        // Play reveal sound
+        playSound('correct');
+        
+        // Mark question as used
+        markQuestionUsed();
+        showAwardButtons();
+    });
+    
+    answerContainer.appendChild(revealBtn);
+    
+    // Add description/notes if available (initially hidden)
+    let descEl = null;
+    if (question.Description) {
+        descEl = document.createElement('div');
+        descEl.className = 'answer-description hidden';
+        descEl.textContent = question.Description;
+        answerContainer.appendChild(descEl);
     }
     
-    if (!isModal) {
-        elements.skipQuestionBtn.disabled = false;
+    answersEl.appendChild(answerContainer);
+}
+
+function renderGeneralQuestion(question, answersEl) {
+    answersEl.classList.add('general-type');
+    
+    // Validate the regex pattern first (if provided)
+    if (question.RegEx) {
+        const patternCheck = validateRegexPattern(question.RegEx);
+        if (!patternCheck.valid) {
+            console.warn(`Invalid regex pattern for question: ${question.Question}`, patternCheck.error);
+            // Fall back to multiple choice if regex is invalid
+            renderMultipleChoiceQuestion(question, answersEl);
+            return;
+        }
+    }
+    
+    // Create input container
+    const inputContainer = document.createElement('div');
+    inputContainer.className = 'general-input-container';
+    
+    // Add hint if available
+    if (question.RegExDescription) {
+        const hint = document.createElement('div');
+        hint.className = 'general-hint';
+        hint.textContent = question.RegExDescription;
+        inputContainer.appendChild(hint);
+    }
+    
+    // Create text input
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'general-answer-input';
+    input.placeholder = 'Type your answer...';
+    input.autocomplete = 'off';
+    
+    // Create submit button
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'submit-answers-btn';
+    submitBtn.textContent = 'Submit Answer';
+    
+    // Create result display
+    const resultDisplay = document.createElement('div');
+    resultDisplay.className = 'general-result hidden';
+    
+    const handleSubmit = async () => {
+        if (state.answerRevealed) return;
+        
+        const userAnswer = input.value.trim();
+        if (!userAnswer) {
+            input.classList.add('shake');
+            setTimeout(() => input.classList.remove('shake'), 500);
+            return;
+        }
+        
+        state.answerRevealed = true;
+        input.disabled = true;
+        submitBtn.disabled = true;
+        
+        // Validate answer - use regex if provided, otherwise case-insensitive string match
+        let isCorrect = false;
+        if (question.RegEx) {
+            const result = await validateRegexAnswer(userAnswer, question.RegEx);
+            isCorrect = result.matched;
+        } else {
+            // Fallback: case-insensitive match against any accepted answer
+            isCorrect = question.Answers.some(a => 
+                a.toLowerCase().trim() === userAnswer.toLowerCase()
+            );
+        }
+        
+        playSound(isCorrect ? 'correct' : 'wrong');
+        
+        if (isCorrect && state.feedbackIntensity === 'full') {
+            showConfetti();
+        }
+        
+        // Show result
+        resultDisplay.classList.remove('hidden');
+        resultDisplay.innerHTML = `
+            <div class="result-status ${isCorrect ? 'correct' : 'incorrect'}">
+                ${isCorrect ? '✓ Correct!' : '✗ Incorrect'}
+            </div>
+            <div class="correct-answer">
+                <strong>Answer:</strong> ${question.Answers.join(', ')}
+            </div>
+            ${!isCorrect && question.Description ? `
+                <div class="answer-description incorrect-explanation">
+                    <strong>💡 Explanation:</strong> ${escapeHtml(question.Description)}
+                </div>
+            ` : ''}
+        `;
+        
+        input.classList.add(isCorrect ? 'correct' : 'incorrect');
+        
+        markQuestionUsed();
+        showAwardButtons();
+    };
+    
+    submitBtn.addEventListener('click', handleSubmit);
+    input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleSubmit();
+    });
+    
+    inputContainer.appendChild(input);
+    inputContainer.appendChild(submitBtn);
+    inputContainer.appendChild(resultDisplay);
+    answersEl.appendChild(inputContainer);
+    
+    // Focus the input
+    setTimeout(() => input.focus(), 100);
+}
+
+// Helper function to mark question as used (extracted from reveal functions)
+function markQuestionUsed() {
+    if (state.currentQuestionIndex !== null) {
+        state.usedQuestions.add(state.currentQuestionIndex);
+        updateQuestionCounter();
+        saveState();
+        
+        // Update Jeopardy cell if in that mode
+        if (state.gameMode === 'jeopardy') {
+            const cell = document.querySelector(`[data-question-index="${state.currentQuestionIndex}"]`);
+            if (cell) {
+                cell.classList.add('used');
+            }
+        }
     }
 }
 
@@ -656,22 +1057,13 @@ function submitMultiSelectAnswers(container, correctCount) {
         submitBtn.textContent = isFullyCorrect ? '✓ All Correct!' : `${correctSelections}/${correctCount} Correct`;
     }
     
-    // Mark question as used
-    if (state.currentQuestionIndex !== null) {
-        state.usedQuestions.add(state.currentQuestionIndex);
-        updateQuestionCounter();
-        saveState();
-        
-        // Update Jeopardy cell if in that mode
-        if (state.gameMode === 'jeopardy') {
-            const cell = document.querySelector(`[data-question-index="${state.currentQuestionIndex}"]`);
-            if (cell) {
-                cell.classList.add('used');
-            }
-        }
+    // Show description to help with learning (for all answers)
+    if (state.currentQuestion?.Description) {
+        showDescriptionAfterAnswer(container, state.currentQuestion.Description, isFullyCorrect);
     }
     
-    // Show award buttons for teams
+    // Mark question as used
+    markQuestionUsed();
     showAwardButtons();
 }
 
@@ -702,23 +1094,39 @@ function revealAnswer(clickedBtn, container) {
         }
     });
     
-    // Mark question as used
-    if (state.currentQuestionIndex !== null) {
-        state.usedQuestions.add(state.currentQuestionIndex);
-        updateQuestionCounter();
-        saveState();
-        
-        // Update Jeopardy cell if in that mode
-        if (state.gameMode === 'jeopardy') {
-            const cell = document.querySelector(`[data-question-index="${state.currentQuestionIndex}"]`);
-            if (cell) {
-                cell.classList.add('used');
-            }
-        }
+    // Show description to help with learning (for all answers)
+    if (state.currentQuestion?.Description) {
+        showDescriptionAfterAnswer(container, state.currentQuestion.Description, isCorrect);
     }
     
-    // Show award buttons for teams
+    // Mark question as used
+    markQuestionUsed();
     showAwardButtons();
+}
+
+// Show description after answer is revealed (for learning purposes)
+function showDescriptionAfterAnswer(container, description, isCorrect = false) {
+    // Check if description element already exists
+    let descEl = container.parentElement.querySelector('.answer-description');
+    if (!descEl) {
+        // Create new description element
+        descEl = document.createElement('div');
+        descEl.className = 'answer-description';
+        container.parentElement.appendChild(descEl);
+    }
+    // Add class based on correctness for styling
+    descEl.classList.toggle('correct-explanation', isCorrect);
+    descEl.classList.toggle('incorrect-explanation', !isCorrect);
+    
+    const icon = isCorrect ? '✨' : '💡';
+    const prefix = isCorrect ? 'Learn more:' : 'Explanation:';
+    descEl.innerHTML = `<strong>${icon} ${prefix}</strong> ${escapeHtml(description)}`;
+    descEl.classList.remove('hidden');
+}
+
+// Legacy wrapper for backwards compatibility
+function showDescriptionAfterIncorrect(container, description) {
+    showDescriptionAfterAnswer(container, description, false);
 }
 
 function nextQuestion() {
@@ -756,32 +1164,61 @@ function buildJeopardyBoard() {
         return;
     }
     
-    // Group questions by category
+    // Group questions by category, tracking first appearance order
     const categories = {};
+    const categoryOrder = []; // Track order of first appearance
     state.questions.forEach((q, index) => {
         if (!categories[q.Category]) {
             categories[q.Category] = [];
+            categoryOrder.push(q.Category);
         }
         categories[q.Category].push({ question: q, index });
     });
     
-    const categoryNames = Object.keys(categories); // All categories
+    // Get category names based on order setting
+    let categoryNames;
+    if (state.questionOrder === 'ordered') {
+        // Use import order (first appearance)
+        categoryNames = categoryOrder;
+    } else {
+        // Randomize category order
+        categoryNames = shuffleArray(Object.keys(categories));
+    }
+    
+    // Always sort questions within each category by Difficulty (L1 at top, L5 at bottom)
+    // This ensures proper ordering in Jeopardy mode
+    for (const cat of categoryNames) {
+        categories[cat].sort((a, b) => {
+            // Extract numeric part from Difficulty (e.g., "L1" -> 1, "L2" -> 2)
+            const diffA = parseInt((a.question.Difficulty || 'L1').replace(/\D/g, '')) || 1;
+            const diffB = parseInt((b.question.Difficulty || 'L1').replace(/\D/g, '')) || 1;
+            if (diffA !== diffB) {
+                return diffA - diffB; // Lower difficulty first (L1 at top, L5 at bottom)
+            }
+            // If same difficulty, sort by QuestionId as secondary sort
+            const idA = a.question.QuestionId || a.index;
+            const idB = b.question.QuestionId || b.index;
+            return idA - idB;
+        });
+    }
     
     // Determine max available rows based on questions
     const maxQuestionsPerCategory = Math.max(...categoryNames.map(cat => categories[cat].length));
+    const previousMax = state.maxAvailableRows || 0;
     state.maxAvailableRows = maxQuestionsPerCategory;
     
     // Update the UI to show max available
     if (elements.jeopardyRows) {
         elements.jeopardyRows.max = maxQuestionsPerCategory;
-        // Auto-adjust rows: if current is higher than max, reduce; if lower than max and user hasn't manually set, suggest max
+        // Auto-adjust rows: if current is higher than max, reduce
         if (state.jeopardyRows > maxQuestionsPerCategory) {
             state.jeopardyRows = maxQuestionsPerCategory;
             elements.jeopardyRows.value = maxQuestionsPerCategory;
         }
-        // If more rows are now available and we're at the old max, increase to new max
-        if (state.jeopardyRows < maxQuestionsPerCategory && elements.jeopardyRows.value == state.jeopardyRows) {
-            // Keep current value but update the max
+        // Auto-expand when: we're at previous max, or starting from 1 (likely new/empty board), or rows increased
+        if (state.jeopardyRows >= previousMax || state.jeopardyRows <= 1 || maxQuestionsPerCategory > previousMax) {
+            state.jeopardyRows = maxQuestionsPerCategory;
+            elements.jeopardyRows.value = maxQuestionsPerCategory;
         }
     }
     if (elements.maxRowsInfo) {
@@ -818,10 +1255,15 @@ function buildJeopardyBoard() {
     });
     elements.jeopardyBoard.appendChild(headerRow);
     
-    // Shuffle questions within each category for variety
-    const shuffledCategories = {};
+    // Shuffle questions within each category ONLY if randomized mode
+    // In ordered mode, keep the difficulty-based sort order
+    const orderedCategories = {};
     categoryNames.forEach(cat => {
-        shuffledCategories[cat] = shuffleArray([...categories[cat]]);
+        if (state.questionOrder === 'ordered') {
+            orderedCategories[cat] = [...categories[cat]]; // Keep sorted order
+        } else {
+            orderedCategories[cat] = shuffleArray([...categories[cat]]); // Randomize
+        }
     });
     
     // Create rows for each point value
@@ -845,7 +1287,7 @@ function buildJeopardyBoard() {
             cell.className = 'jeopardy-cell value-cell';
             cell.dataset.category = cat; // Store category for reference
             
-            const categoryQuestions = shuffledCategories[cat];
+            const categoryQuestions = orderedCategories[cat];
             
             if (rowIndex < categoryQuestions.length) {
                 const questionData = categoryQuestions[rowIndex];
@@ -898,7 +1340,7 @@ function formatPointDisplay(points) {
     if (state.pointLabel && state.pointLabel.trim()) {
         return `${points} ${state.pointLabel}`;
     }
-    return state.usePointValues ? `$${points}` : '1 PT';
+    return state.usePointValues ? `${points} pt` : '1 pt';
 }
 
 function openJeopardyQuestion(index, customPoints = null) {
@@ -911,6 +1353,12 @@ function openJeopardyQuestion(index, customPoints = null) {
 }
 
 function closeModal() {
+    // Remove ALL descriptions (may be in answersGrid or parent container)
+    const parentContainer = elements.modalAnswersGrid.parentElement;
+    if (parentContainer) {
+        parentContainer.querySelectorAll('.answer-description').forEach(el => el.remove());
+    }
+    elements.modalAnswersGrid.querySelectorAll('.answer-description').forEach(el => el.remove());
     elements.questionModal.classList.add('hidden');
     hideAwardButtons();
     state.answerRevealed = false;
@@ -919,17 +1367,86 @@ function closeModal() {
 }
 
 // ==================== IMPORT/EXPORT ====================
-// Generate a unique ID for a question based on its content
+// Generate MD5 hash from question + answers for deduplication
 function generateQuestionId(q) {
-    // Create a hash from category + question text for deduplication
-    const content = `${q.Category || ''}|${q.Question || ''}`;
-    let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-        const char = content.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32bit integer
+    const question = (q.Question || '').trim().toLowerCase();
+    const answers = (q.Answers || []).map(a => a.trim().toLowerCase()).sort().join('|');
+    const content = question + '::' + answers;
+    
+    // Simple MD5 implementation
+    function md5(string) {
+        function rotateLeft(val, shift) {
+            return (val << shift) | (val >>> (32 - shift));
+        }
+        function addUnsigned(x, y) {
+            const x8 = x & 0x80000000, y8 = y & 0x80000000;
+            const x4 = x & 0x40000000, y4 = y & 0x40000000;
+            const result = (x & 0x3FFFFFFF) + (y & 0x3FFFFFFF);
+            if (x4 & y4) return result ^ 0x80000000 ^ x8 ^ y8;
+            if (x4 | y4) {
+                if (result & 0x40000000) return result ^ 0xC0000000 ^ x8 ^ y8;
+                return result ^ 0x40000000 ^ x8 ^ y8;
+            }
+            return result ^ x8 ^ y8;
+        }
+        function f(x, y, z) { return (x & y) | (~x & z); }
+        function g(x, y, z) { return (x & z) | (y & ~z); }
+        function h(x, y, z) { return x ^ y ^ z; }
+        function i(x, y, z) { return y ^ (x | ~z); }
+        function ff(a, b, c, d, x, s, ac) { return addUnsigned(rotateLeft(addUnsigned(addUnsigned(a, f(b, c, d)), addUnsigned(x, ac)), s), b); }
+        function gg(a, b, c, d, x, s, ac) { return addUnsigned(rotateLeft(addUnsigned(addUnsigned(a, g(b, c, d)), addUnsigned(x, ac)), s), b); }
+        function hh(a, b, c, d, x, s, ac) { return addUnsigned(rotateLeft(addUnsigned(addUnsigned(a, h(b, c, d)), addUnsigned(x, ac)), s), b); }
+        function ii(a, b, c, d, x, s, ac) { return addUnsigned(rotateLeft(addUnsigned(addUnsigned(a, i(b, c, d)), addUnsigned(x, ac)), s), b); }
+        function convertToWordArray(str) {
+            const len = str.length, numWords = ((len + 8 - ((len + 8) % 64)) / 64 + 1) * 16;
+            const words = new Array(numWords - 1).fill(0);
+            let pos = 0;
+            for (let i = 0; i < len; i++) {
+                const wordNum = (i - (i % 4)) / 4;
+                pos = (i % 4) * 8;
+                words[wordNum] |= str.charCodeAt(i) << pos;
+            }
+            words[(len - (len % 4)) / 4] |= 0x80 << ((len % 4) * 8);
+            words[numWords - 2] = len << 3;
+            words[numWords - 1] = len >>> 29;
+            return words;
+        }
+        function wordToHex(val) {
+            let hex = '';
+            for (let i = 0; i <= 3; i++) hex += ((val >>> (i * 8)) & 255).toString(16).padStart(2, '0');
+            return hex;
+        }
+        const S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+        const K = [
+            0xD76AA478, 0xE8C7B756, 0x242070DB, 0xC1BDCEEE, 0xF57C0FAF, 0x4787C62A, 0xA8304613, 0xFD469501,
+            0x698098D8, 0x8B44F7AF, 0xFFFF5BB1, 0x895CD7BE, 0x6B901122, 0xFD987193, 0xA679438E, 0x49B40821,
+            0xF61E2562, 0xC040B340, 0x265E5A51, 0xE9B6C7AA, 0xD62F105D, 0x02441453, 0xD8A1E681, 0xE7D3FBC8,
+            0x21E1CDE6, 0xC33707D6, 0xF4D50D87, 0x455A14ED, 0xA9E3E905, 0xFCEFA3F8, 0x676F02D9, 0x8D2A4C8A,
+            0xFFFA3942, 0x8771F681, 0x6D9D6122, 0xFDE5380C, 0xA4BEEA44, 0x4BDECFA9, 0xF6BB4B60, 0xBEBFBC70,
+            0x289B7EC6, 0xEAA127FA, 0xD4EF3085, 0x04881D05, 0xD9D4D039, 0xE6DB99E5, 0x1FA27CF8, 0xC4AC5665,
+            0xF4292244, 0x432AFF97, 0xAB9423A7, 0xFC93A039, 0x655B59C3, 0x8F0CCC92, 0xFFEFF47D, 0x85845DD1,
+            0x6FA87E4F, 0xFE2CE6E0, 0xA3014314, 0x4E0811A1, 0xF7537E82, 0xBD3AF235, 0x2AD7D2BB, 0xEB86D391
+        ];
+        const words = convertToWordArray(unescape(encodeURIComponent(string)));
+        let a = 0x67452301, b = 0xEFCDAB89, c = 0x98BADCFE, d = 0x10325476;
+        for (let k = 0; k < words.length; k += 16) {
+            const AA = a, BB = b, CC = c, DD = d;
+            for (let j = 0; j < 64; j++) {
+                let fn, idx;
+                if (j < 16) { fn = ff; idx = j; }
+                else if (j < 32) { fn = gg; idx = (5 * j + 1) % 16; }
+                else if (j < 48) { fn = hh; idx = (3 * j + 5) % 16; }
+                else { fn = ii; idx = (7 * j) % 16; }
+                const temp = d; d = c; c = b;
+                b = fn(a, b, c, temp, words[k + idx], S[Math.floor(j / 16) * 4 + (j % 4)], K[j]);
+                a = temp;
+            }
+            a = addUnsigned(a, AA); b = addUnsigned(b, BB); c = addUnsigned(c, CC); d = addUnsigned(d, DD);
+        }
+        return wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d);
     }
-    return `q_${Math.abs(hash).toString(36)}`;
+    
+    return md5(content);
 }
 
 function cleanValue(val) {
@@ -947,15 +1464,27 @@ function cleanValue(val) {
 }
 
 function cleanQuestion(q) {
+    // Normalize type - convert 'regex' to 'general' for backwards compatibility
+    let qType = cleanValue(q.Type || 'multiple_choice');
+    if (qType === 'regex') {
+        qType = 'general';
+    }
+    
     const cleaned = {
+        QuestionId: q.QuestionId || state.nextQuestionId++,
         Category: cleanValue(q.Category || ''),
         Difficulty: cleanValue(q.Difficulty || 'L1'),
+        Type: qType,
         Question: cleanValue(q.Question || ''),
         Answers: (q.Answers || []).map(a => cleanValue(a)),
-        IncorrectAnswers: (q.IncorrectAnswers || []).map(a => cleanValue(a))
+        IncorrectAnswers: (q.IncorrectAnswers || []).map(a => cleanValue(a)),
+        Description: cleanValue(q.Description || ''),
+        RegEx: cleanValue(q.RegEx || ''),
+        RegExDescription: cleanValue(q.RegExDescription || '')
     };
-    // Add or preserve ID for deduplication
-    cleaned.id = q.id || generateQuestionId(cleaned);
+    
+    // Use normalized question text as ID for deduplication
+    cleaned.id = generateQuestionId(cleaned);
     return cleaned;
 }
 
@@ -992,7 +1521,23 @@ function parseJSONL(text, existingIds = new Set()) {
 }
 
 function exportToJSONL() {
-    const lines = state.questions.map(q => JSON.stringify(q));
+    // Export with consistent field order matching Template.jsonl
+    const lines = state.questions.map(q => {
+        const ordered = {
+            id: q.id,
+            QuestionId: q.QuestionId,
+            Difficulty: q.Difficulty,
+            Category: q.Category,
+            Type: q.Type,
+            Description: q.Description || '',
+            Question: q.Question,
+            Answers: q.Answers,
+            IncorrectAnswers: q.IncorrectAnswers || [],
+            RegEx: q.RegEx || '',
+            RegExDescription: q.RegExDescription || ''
+        };
+        return JSON.stringify(ordered);
+    });
     const content = lines.join('\n');
     
     const blob = new Blob([content], { type: 'application/jsonl' });
@@ -1333,26 +1878,61 @@ function escapeHtml(text) {
 function addQuestion(e) {
     e.preventDefault();
     
-    const category = document.getElementById('newCategory').value.trim();
+    let category = document.getElementById('newCategory').value.trim();
     const difficulty = document.getElementById('newDifficulty').value;
+    const questionType = document.getElementById('newType').value;
+    
+    // Normalize category to match existing categories (case-insensitive)
+    const existingCategory = state.questions.find(q => 
+        q.Category.toLowerCase() === category.toLowerCase()
+    );
+    if (existingCategory) {
+        category = existingCategory.Category; // Use existing casing
+    }
     const question = document.getElementById('newQuestion').value.trim();
+    const description = document.getElementById('newDescription').value.trim();
     const answers = document.getElementById('newAnswers').value.split(',').map(a => a.trim()).filter(a => a);
     const incorrect = document.getElementById('newIncorrect').value.split(',').map(a => a.trim()).filter(a => a);
+    const regex = document.getElementById('newRegex').value.trim();
+    const regexDescription = document.getElementById('newRegexDescription').value.trim();
     
-    if (incorrect.length < 3 || incorrect.length > 7) {
-        alert('Please provide between 3 and 7 incorrect answers.');
-        return;
+    // Validate based on question type
+    if (questionType === 'multiple_choice' || questionType === 'multiple_answer') {
+        if (incorrect.length < 3 || incorrect.length > 7) {
+            alert('Please provide between 3 and 7 incorrect answers.');
+            return;
+        }
+    }
+    
+    if (questionType === 'general' && regex) {
+        const validation = validateRegexPattern(regex);
+        if (!validation.valid) {
+            alert(`Invalid regex pattern: ${validation.error}`);
+            return;
+        }
     }
     
     const newQ = {
+        QuestionId: state.nextQuestionId++,
         Category: category,
         Difficulty: difficulty,
+        Type: questionType,
         Question: question,
         Answers: answers,
-        IncorrectAnswers: incorrect
+        IncorrectAnswers: incorrect,
+        Description: description || '',
+        RegEx: (questionType === 'general' && regex) ? regex : '',
+        RegExDescription: (questionType === 'general' && regex && regexDescription) ? regexDescription : ''
     };
     
+    // Generate ID based on content hash for deduplication
+    newQ.id = generateQuestionId(newQ);
+    
     state.questions.push(newQ);
+    
+    // Recalculate max rows and auto-expand if needed
+    recalculateMaxRows();
+    
     updateQuestionCounter();
     if (state.gameMode === 'jeopardy') {
         buildJeopardyBoard();
@@ -1361,8 +1941,96 @@ function addQuestion(e) {
     
     // Reset form and close modal
     e.target.reset();
+    resetAddQuestionForm();
     closeAddQuestionModal();
     alert('Question added!');
+}
+
+function resetAddQuestionForm() {
+    // Reset visibility of conditional fields
+    if (elements.regexGroup) elements.regexGroup.classList.add('hidden');
+    if (elements.regexDescGroup) elements.regexDescGroup.classList.add('hidden');
+    if (elements.incorrectAnswersGroup) elements.incorrectAnswersGroup.classList.remove('hidden');
+    if (elements.newType) elements.newType.value = 'multiple_choice';
+}
+
+function handleQuestionTypeChange(e) {
+    const type = e.target.value;
+    
+    // Show/hide regex fields (for 'general' type)
+    const showRegex = type === 'general';
+    if (elements.regexGroup) elements.regexGroup.classList.toggle('hidden', !showRegex);
+    if (elements.regexDescGroup) elements.regexDescGroup.classList.toggle('hidden', !showRegex);
+    
+    // Show/hide incorrect answers (not needed for hidden or general)
+    const showIncorrect = type === 'multiple_choice' || type === 'multiple_answer';
+    if (elements.incorrectAnswersGroup) elements.incorrectAnswersGroup.classList.toggle('hidden', !showIncorrect);
+    
+    // Update required attribute
+    const incorrectInput = document.getElementById('newIncorrect');
+    if (incorrectInput) {
+        incorrectInput.required = showIncorrect;
+    }
+}
+
+function handleRegexTemplateChange(e) {
+    const template = e.target.value;
+    const regexInput = document.getElementById('newRegex');
+    const answersInput = document.getElementById('newAnswers');
+    
+    if (!template || !regexInput) return;
+    
+    const answer = answersInput ? answersInput.value.split(',')[0].trim() : '';
+    
+    // If no answer entered yet, show placeholder with instructions
+    if (!answer) {
+        const placeholders = {
+            'number': '^67$',
+            'numberOrWord': '^(67|sixty-seven)$',
+            'year': '^2000$',
+            'port': '^(port.?.?)?67$',
+            'level': '^(level.?.?)?67$',
+            'caseInsensitive': '^TEXT$',
+            'contains': '^.*TEXT.*$'
+        };
+        regexInput.value = placeholders[template] || '';
+        regexInput.placeholder = 'Enter answer first, then re-select template';
+        return;
+    }
+    
+    // Build pattern based on template and answer
+    const escapedAnswer = escapeRegex(answer);
+    const wordForm = numberToWord(answer);
+    
+    const patterns = {
+        'number': `^${escapedAnswer}$`,
+        'numberOrWord': `^(${escapedAnswer}|${wordForm})$`,
+        'year': `^${escapedAnswer}$`,
+        'port': `^(port\\s*)?${escapedAnswer}$`,
+        'level': `^(level\\s*)?${escapedAnswer}$`,
+        'caseInsensitive': `^${escapedAnswer}$`,
+        'contains': `.*${escapedAnswer}.*`
+    };
+    
+    if (patterns[template]) {
+        regexInput.value = patterns[template];
+        regexInput.placeholder = 'e.g., ^(4|four)$';
+    }
+}
+
+function numberToWord(num) {
+    const words = {
+        '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+        '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
+        '10': 'ten', '11': 'eleven', '12': 'twelve', '13': 'thirteen',
+        '14': 'fourteen', '15': 'fifteen', '16': 'sixteen', '17': 'seventeen',
+        '18': 'eighteen', '19': 'nineteen', '20': 'twenty'
+    };
+    return words[num] || num;
+}
+
+function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ==================== RESET ====================
@@ -1384,7 +2052,9 @@ function resetAll() {
         teams: [{ name: 'Team 1', score: 0 }],
         teamCount: 1,
         gameMode: 'single',
-        usePointValues: true,
+        questionOrder: 'ordered',
+        nextQuestionId: 1,
+        usePointValues: false,
         l1Points: 100,
         l2Points: 200,
         jeopardyRows: 5,
@@ -1400,7 +2070,7 @@ function resetAll() {
     
     // Reset UI
     elements.teamCount.value = '1';
-    elements.usePointValues.checked = true;
+    elements.usePointValues.checked = false;
     elements.l1Points.value = '100';
     elements.l2Points.value = '200';
     elements.jeopardyRows.value = '5';
@@ -1410,6 +2080,7 @@ function resetAll() {
     elements.answerDifficulty.value = 'easy';
     elements.feedbackIntensity.value = 'full';
     elements.volumeSlider.value = '50';
+    if (elements.questionOrder) elements.questionOrder.value = 'ordered';
     updateVolumeUI();
     elements.imagePreviewGroup.classList.add('hidden');
     
@@ -1436,6 +2107,34 @@ function resetScores() {
     
     updateScoreboard();
     saveState();
+}
+
+function resetQuestions() {
+    if (!confirm('Reset all questions to unanswered? (Keeps scores and questions)')) {
+        return;
+    }
+    
+    state.usedQuestions.clear();
+    state.currentQuestion = null;
+    state.currentQuestionIndex = null;
+    state.answerRevealed = false;
+    
+    // Reset UI
+    elements.questionText.textContent = 'Press "Next Question" to start!';
+    elements.answersGrid.innerHTML = '';
+    elements.skipQuestionBtn.disabled = true;
+    
+    // Hide award sections
+    if (elements.singleAwardSection) elements.singleAwardSection.classList.add('hidden');
+    if (elements.questionActions) elements.questionActions.classList.remove('hidden');
+    
+    updateQuestionCounter();
+    if (state.gameMode === 'jeopardy') {
+        buildJeopardyBoard();
+    }
+    saveState();
+    
+    alert('All questions reset to unanswered!');
 }
 
 // ==================== GAME MODE ====================
@@ -1516,6 +2215,168 @@ function closeAddQuestionModal() {
     const modal = document.getElementById('addQuestionModal');
     modal.classList.add('hidden');
     elements.addQuestionForm.reset();
+    // Reset to single add form
+    if (elements.singleAddForm) elements.singleAddForm.classList.remove('hidden');
+    if (elements.bulkAddForm) elements.bulkAddForm.classList.add('hidden');
+}
+
+// ==================== BULK ADD QUESTIONS ====================
+function toggleBulkAddMode() {
+    const singleForm = elements.singleAddForm;
+    const bulkForm = elements.bulkAddForm;
+    const bulkBtn = elements.bulkAddBtn;
+    
+    if (!singleForm || !bulkForm) return;
+    
+    const isBulkMode = !bulkForm.classList.contains('hidden');
+    
+    if (isBulkMode) {
+        // Switch to single mode
+        singleForm.classList.remove('hidden');
+        bulkForm.classList.add('hidden');
+        bulkBtn.textContent = '📋 Bulk Add';
+    } else {
+        // Switch to bulk mode
+        singleForm.classList.add('hidden');
+        bulkForm.classList.remove('hidden');
+        bulkBtn.textContent = '✏️ Single Add';
+        // Initialize with 3 rows if empty
+        if (elements.bulkAddRows.children.length === 0) {
+            for (let i = 0; i < 3; i++) {
+                addBulkRow();
+            }
+        }
+    }
+}
+
+function addBulkRow() {
+    const container = elements.bulkAddRows;
+    if (!container) return;
+    
+    const rowCount = container.children.length;
+    if (rowCount >= 10) {
+        alert('Maximum 10 questions at a time');
+        return;
+    }
+    
+    const row = document.createElement('div');
+    row.className = 'bulk-row';
+    row.innerHTML = `
+        <span class="bulk-row-number">${rowCount + 1}</span>
+        <input type="text" class="bulk-category" placeholder="Category" required>
+        <select class="bulk-difficulty">
+            <option value="L1">L1</option>
+            <option value="L2">L2</option>
+        </select>
+        <select class="bulk-type">
+            <option value="general">General</option>
+            <option value="multiple_choice" selected>MC</option>
+            <option value="multiple_answer">MA</option>
+            <option value="hidden">Hidden</option>
+        </select>
+        <input type="text" class="bulk-question" placeholder="Question text" required>
+        <input type="text" class="bulk-answers" placeholder="Correct answer(s), comma-sep">
+        <input type="text" class="bulk-incorrect" placeholder="Incorrect answers, comma-sep">
+        <button type="button" class="btn btn-small btn-danger bulk-remove-btn" title="Remove row">✕</button>
+    `;
+    
+    // Add remove handler
+    row.querySelector('.bulk-remove-btn').addEventListener('click', () => {
+        row.remove();
+        updateBulkRowNumbers();
+    });
+    
+    container.appendChild(row);
+}
+
+function updateBulkRowNumbers() {
+    const rows = elements.bulkAddRows.querySelectorAll('.bulk-row');
+    rows.forEach((row, index) => {
+        row.querySelector('.bulk-row-number').textContent = index + 1;
+    });
+}
+
+function submitBulkQuestions() {
+    const rows = elements.bulkAddRows.querySelectorAll('.bulk-row');
+    const questions = [];
+    const errors = [];
+    
+    rows.forEach((row, index) => {
+        const category = row.querySelector('.bulk-category').value.trim();
+        const difficulty = row.querySelector('.bulk-difficulty').value;
+        const type = row.querySelector('.bulk-type').value;
+        const question = row.querySelector('.bulk-question').value.trim();
+        const answers = row.querySelector('.bulk-answers').value.split(',').map(a => a.trim()).filter(a => a);
+        const incorrect = row.querySelector('.bulk-incorrect').value.split(',').map(a => a.trim()).filter(a => a);
+        
+        // Validate row
+        if (!category || !question) {
+            if (category || question || answers.length > 0) {
+                errors.push(`Row ${index + 1}: Category and Question are required`);
+            }
+            return; // Skip empty rows
+        }
+        
+        if (answers.length === 0) {
+            errors.push(`Row ${index + 1}: At least one correct answer required`);
+            return;
+        }
+        
+        if ((type === 'multiple_choice' || type === 'multiple_answer') && incorrect.length < 3) {
+            errors.push(`Row ${index + 1}: Multiple choice/answer needs at least 3 incorrect answers`);
+            return;
+        }
+        
+        // Normalize category to match existing
+        let normalizedCategory = category;
+        const existingCategory = state.questions.find(q => 
+            q.Category.toLowerCase() === category.toLowerCase()
+        );
+        if (existingCategory) {
+            normalizedCategory = existingCategory.Category;
+        }
+        
+        const newQ = {
+            QuestionId: state.nextQuestionId++,
+            Category: normalizedCategory,
+            Difficulty: difficulty,
+            Type: type,
+            Question: question,
+            Answers: answers,
+            IncorrectAnswers: incorrect,
+            Description: '',
+            RegEx: '',
+            RegExDescription: ''
+        };
+        newQ.id = generateQuestionId(newQ);
+        questions.push(newQ);
+    });
+    
+    if (errors.length > 0) {
+        alert('Errors:\n' + errors.join('\n'));
+        return;
+    }
+    
+    if (questions.length === 0) {
+        alert('No valid questions to add');
+        return;
+    }
+    
+    // Add all questions
+    state.questions.push(...questions);
+    
+    // Update UI
+    recalculateMaxRows();
+    updateQuestionCounter();
+    if (state.gameMode === 'jeopardy') {
+        buildJeopardyBoard();
+    }
+    saveState();
+    
+    // Clear and close
+    elements.bulkAddRows.innerHTML = '';
+    closeAddQuestionModal();
+    alert(`Added ${questions.length} questions!`);
 }
 
 // Update image preview in settings
@@ -1597,6 +2458,17 @@ function initEventListeners() {
         saveState();
     });
     
+    // Question order (ordered vs randomized)
+    if (elements.questionOrder) {
+        elements.questionOrder.addEventListener('change', (e) => {
+            state.questionOrder = e.target.value;
+            if (state.gameMode === 'jeopardy') {
+                buildJeopardyBoard();
+            }
+            saveState();
+        });
+    }
+    
     // Jeopardy rows
     elements.jeopardyRows.addEventListener('change', (e) => {
         let val = parseInt(e.target.value) || 5;
@@ -1675,8 +2547,43 @@ function initEventListeners() {
     
     elements.addQuestionForm.addEventListener('submit', addQuestion);
     
+    // Bulk add mode toggle
+    if (elements.bulkAddBtn) {
+        elements.bulkAddBtn.addEventListener('click', toggleBulkAddMode);
+    }
+    if (elements.addBulkRowBtn) {
+        elements.addBulkRowBtn.addEventListener('click', addBulkRow);
+    }
+    if (elements.submitBulkBtn) {
+        elements.submitBulkBtn.addEventListener('click', submitBulkQuestions);
+    }
+    
+    // Add Question form - type change handler
+    if (elements.newType) {
+        elements.newType.addEventListener('change', handleQuestionTypeChange);
+    }
+    
+    // Add Question form - regex template handler
+    if (elements.regexTemplate) {
+        elements.regexTemplate.addEventListener('change', handleRegexTemplateChange);
+    }
+    
+    // Add Question form - auto-update regex when answer changes (if template selected)
+    const newAnswersInput = document.getElementById('newAnswers');
+    if (newAnswersInput && elements.regexTemplate) {
+        newAnswersInput.addEventListener('input', () => {
+            // Only auto-update if a template is selected (not custom)
+            if (elements.regexTemplate.value) {
+                handleRegexTemplateChange({ target: elements.regexTemplate });
+            }
+        });
+    }
+    
     elements.resetBtn.addEventListener('click', resetAll);
     elements.resetScoresBtn.addEventListener('click', resetScores);
+    if (elements.resetQuestionsBtn) {
+        elements.resetQuestionsBtn.addEventListener('click', resetQuestions);
+    }
     
     // Single mode controls
     elements.nextQuestionBtn.addEventListener('click', nextQuestion);
@@ -1770,6 +2677,8 @@ function initEventListeners() {
     });
 }
 
+
+
 // ==================== INITIALIZATION ====================
 function init() {
     const hasState = loadState();
@@ -1809,6 +2718,9 @@ function init() {
         }
         if (elements.pointImageMode) {
             elements.pointImageMode.value = state.pointImageMode || 'none';
+        }
+        if (elements.questionOrder) {
+            elements.questionOrder.value = state.questionOrder || 'ordered';
         }
         updateImagePreview();
     } else {
