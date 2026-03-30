@@ -14,6 +14,12 @@ To add new question categories or banks to the database, you only need to create
 
 If you need a template, just add any question from the WebApp and export it to get the format.
 
+#### Docker Hub
+```sh
+docker run --rm -p 3002:80 -v $(pwd)/question_bank:/app/question_bank -v $(pwd)/data:/app/data trivia-quest:latest
+```
+
+#### Docker Build
 ```bash
 docker compose up -d --build
 ```
@@ -21,9 +27,12 @@ docker compose up -d --build
 ### Python Local Server
 
 ```bash
+start-server.ps1
+# OR
 python -m http.server 8000
 ```
-Then open your browser to http://localhost:8000/
+
+Then open your browser to http://localhost:3002/ (or 8000 if using Python's http.server)
 
 Or use the helper scripts:
 

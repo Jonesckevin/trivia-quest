@@ -19,7 +19,7 @@ RUN python build_database.py
 # =============================================================================
 # Stage 2: Combined production image with nginx + API
 # =============================================================================
-FROM nginx:alpine
+FROM nginx:1-alpine-slim
 
 # Install dependencies
 RUN apk add --no-cache \
