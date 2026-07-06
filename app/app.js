@@ -1224,6 +1224,7 @@ function nextQuestion() {
 }
 
 function skipQuestion() {
+    markQuestionUsed();
     nextQuestion();
 }
 
