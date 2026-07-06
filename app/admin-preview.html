@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Question Preview - Trivia Quest</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg-primary, #0d0d1a);
+            color: var(--text-primary, #e0e0e0);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        .admin-preview-container {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-primary, #0d0d1a);
+            padding: 1rem;
+            box-sizing: border-box;
+        }
+
+        .admin-preview-wrapper {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            max-width: 1600px;
+            margin: 0 auto;
+            width: 100%;
+            gap: 1rem;
+        }
+
+        .auth-section {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            padding: 1rem;
+            background: var(--bg-secondary, #1a1a2e);
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #333);
+        }
+
+        .auth-section.hidden {
+            display: none;
+        }
+
+        .auth-input {
+            flex: 1;
+            padding: 0.75rem;
+            background: var(--bg-primary, #0d0d1a);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 6px;
+            color: var(--text-primary, #e0e0e0);
+            font-size: 1rem;
+        }
+
+        .auth-input:focus {
+            outline: none;
+            border-color: var(--accent-primary, #8b5cf6);
+            box-shadow: 0 0 12px rgba(139, 92, 246, 0.3);
+        }
+
+        .btn-auth {
+            padding: 0.875rem 1.75rem;
+            background: var(--accent-primary, #8b5cf6);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+        }
+
+        .btn-auth:hover {
+            background: var(--accent-hover, #7c3aed);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.5);
+        }
+
+        .btn-auth:active {
+            transform: translateY(0);
+        }
+
+        .auth-error {
+            color: #ff6b6b;
+            margin-left: 1rem;
+            min-width: 150px;
+        }
+
+        .preview-content {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            gap: 1rem;
+        }
+
+        .preview-content.hidden {
+            display: none;
+        }
+
+        .preview-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .toolbar-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .column-selector-btn {
+            padding: 0.625rem 1rem;
+            background: var(--bg-secondary, #1a1a2e);
+            color: var(--text-primary, #e0e0e0);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .column-selector-btn:hover {
+            background: var(--bg-tertiary, #252540);
+            border-color: var(--accent-primary, #8b5cf6);
+        }
+
+        .column-selector-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            background: var(--bg-secondary, #1a1a2e);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            min-width: 200px;
+            overflow: hidden;
+        }
+
+        .column-selector-dropdown.hidden {
+            display: none;
+        }
+
+        .column-option {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            color: var(--text-primary, #e0e0e0);
+            cursor: pointer;
+            transition: background-color 0.15s;
+            border-bottom: 1px solid rgba(139, 92, 246, 0.1);
+        }
+
+        .column-option:last-child {
+            border-bottom: none;
+        }
+
+        .column-option:hover {
+            background-color: rgba(139, 92, 246, 0.15);
+        }
+
+        .column-option input[type="checkbox"] {
+            margin-right: 0.75rem;
+            cursor: pointer;
+            accent-color: var(--accent-primary, #8b5cf6);
+        }
+
+        .column-option label {
+            flex: 1;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        input.admin-preview-search {
+            width: 100%;
+            padding: 0.875rem 0.75rem 0.875rem 5rem !important;
+            background: var(--bg-secondary, #1a1a2e);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 8px;
+            color: var(--text-primary, #e0e0e0);
+            font-size: 1.05rem;
+            transition: all 0.2s;
+        }
+
+        input.admin-preview-search:focus {
+            outline: none;
+            border-color: var(--accent-primary, #8b5cf6);
+            box-shadow: 0 0 12px rgba(139, 92, 246, 0.3);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 1.2rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--accent-primary, #8b5cf6);
+            font-size: 0.9rem;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .preview-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary, #999);
+            font-size: 0.95rem;
+            white-space: nowrap;
+        }
+
+        .preview-count {
+            color: var(--accent-primary, #8b5cf6);
+            font-weight: 600;
+        }
+
+        .admin-preview-table-wrap {
+            flex: 1;
+            overflow: auto;
+            border: 1px solid var(--border-color, #333);
+            border-radius: 8px;
+            background: var(--bg-primary, #0d0d1a);
+        }
+
+        /* Custom scrollbar styling */
+        .admin-preview-table-wrap::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        .admin-preview-table-wrap::-webkit-scrollbar-track {
+            background: var(--bg-primary, #0d0d1a);
+        }
+
+        .admin-preview-table-wrap::-webkit-scrollbar-thumb {
+            background: var(--accent-primary, #8b5cf6);
+            border-radius: 5px;
+        }
+
+        .admin-preview-table-wrap::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-hover, #7c3aed);
+        }
+
+        .admin-preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .admin-preview-table thead {
+            background: var(--bg-tertiary, #252540);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .admin-preview-table th {
+            padding: 1.125rem 1rem;
+            border-bottom: 1px solid var(--border-color, #333);
+            color: var(--text-secondary, #999);
+            font-weight: 600;
+            text-align: left;
+            white-space: nowrap;
+            user-select: none;
+            position: relative;
+        }
+
+        .th-content {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .resize-handle {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: transparent;
+            cursor: col-resize;
+            user-select: none;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+
+        .admin-preview-table th:hover .resize-handle {
+            opacity: 1;
+            background: var(--accent-primary, #8b5cf6);
+        }
+
+        .admin-preview-table td {
+            padding: 1rem;
+            border-bottom: 1px solid rgba(139, 92, 246, 0.1);
+            color: var(--text-primary, #e0e0e0);
+            word-break: break-word;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Column width classes */
+        .col-id { width: 80px; }
+        .col-category { width: 120px; }
+        .col-level { width: 70px; }
+        .col-type { width: 100px; }
+        .col-question { width: 250px; }
+        .col-answers { width: 150px; }
+        .col-incorrect { width: 180px; }
+        .col-description { width: 200px; }
+
+        .admin-preview-table tbody tr {
+            transition: background-color 0.2s;
+        }
+
+        .admin-preview-table tbody tr:hover {
+            background-color: rgba(139, 92, 246, 0.08);
+        }
+
+        .admin-preview-table tbody tr:nth-child(even) {
+            background-color: rgba(139, 92, 246, 0.03);
+        }
+
+        .loading-row td {
+            padding: 2rem 1rem;
+            text-align: center;
+            color: var(--text-secondary, #999);
+        }
+
+        .admin-preview-pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            padding: 1rem;
+            background: var(--bg-secondary, #1a1a2e);
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #333);
+        }
+
+        .pagination-btn {
+            padding: 0.625rem 1.25rem;
+            background: var(--accent-primary, #8b5cf6);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: var(--accent-hover, #7c3aed);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.5);
+        }
+
+        .pagination-btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .pagination-info {
+            color: var(--text-secondary, #999);
+            min-width: 120px;
+            text-align: center;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="admin-preview-container">
+        <div class="admin-preview-wrapper">
+            <!-- Authentication Section -->
+            <div id="authSection" class="auth-section">
+                <input 
+                    type="password" 
+                    id="adminPassword" 
+                    class="auth-input" 
+                    placeholder="Enter admin password..." 
+                    autocomplete="off"
+                >
+                <button id="submitAuthBtn" class="btn-auth">Login</button>
+                <div id="authError" class="auth-error"></div>
+            </div>
+
+            <!-- Preview Content -->
+            <div id="previewContent" class="preview-content hidden">
+                <div class="preview-toolbar">
+                    <div class="toolbar-left">
+                        <div class="search-box">
+                            <span class="search-icon">🔍</span>
+                            <input 
+                                type="text" 
+                                id="adminPreviewSearch" 
+                                class="admin-preview-search" 
+                                placeholder="Search questions, answers, categories..."
+                            >
+                        </div>
+                    </div>
+                    <div class="toolbar-right">
+                        <div class="preview-info">
+                            Found: <span id="previewCount" class="preview-count">0 questions</span>
+                        </div>
+                        <div style="position: relative;">
+                            <button id="columnSelectorBtn" class="column-selector-btn">⚙️ Columns</button>
+                            <div id="columnSelectorDropdown" class="column-selector-dropdown hidden">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="admin-preview-table-wrap">
+                    <table class="admin-preview-table">
+                        <thead>
+                            <tr>
+                                <th class="col-id" data-column="id"><div class="th-content"><span>ID</span><span class="resize-handle"></span></div></th>
+                                <th class="col-category" data-column="category"><div class="th-content"><span>Category</span><span class="resize-handle"></span></div></th>
+                                <th class="col-difficulty" data-column="level"><div class="th-content"><span>Level</span><span class="resize-handle"></span></div></th>
+                                <th class="col-type" data-column="type"><div class="th-content"><span>Type</span><span class="resize-handle"></span></div></th>
+                                <th class="col-question" data-column="question"><div class="th-content"><span>Question</span><span class="resize-handle"></span></div></th>
+                                <th class="col-answers" data-column="answers"><div class="th-content"><span>Answers</span><span class="resize-handle"></span></div></th>
+                                <th class="col-incorrect" data-column="incorrect"><div class="th-content"><span>Incorrect Answers</span><span class="resize-handle"></span></div></th>
+                                <th class="col-description" data-column="description"><div class="th-content"><span>Description</span><span class="resize-handle"></span></div></th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminPreviewBody">
+                            <tr class="loading-row">
+                                <td colspan="8">Loading questions...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="admin-preview-pagination">
+                    <button id="previewPrevBtn" class="pagination-btn">← Previous</button>
+                    <div id="paginationInfo" class="pagination-info">0 - 0 / 0</div>
+                    <button id="previewNextBtn" class="pagination-btn">Next →</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let adminPreviewState = {
+            questions: [],
+            currentPage: 0,
+            pageSize: 25,
+            adminToken: null,
+            searchQuery: '',
+            totalQuestions: 0,
+            hasMore: false,
+            isAuthenticated: false,
+            visibleColumns: {
+                id: true,
+                category: true,
+                level: true,
+                type: true,
+                question: true,
+                answers: true,
+                incorrect: true,
+                description: true
+            },
+            columnWidths: {
+                id: 80,
+                category: 120,
+                level: 70,
+                type: 100,
+                question: 250,
+                answers: 150,
+                incorrect: 180,
+                description: 200
+            },
+            resizingColumn: null,
+            resizeStartX: 0,
+            resizeStartWidth: 0
+        };
+
+        // Initialize column selector
+        function initColumnSelector() {
+            const dropdown = document.getElementById('columnSelectorDropdown');
+            const columns = [
+                { key: 'id', label: 'ID' },
+                { key: 'category', label: 'Category' },
+                { key: 'level', label: 'Level' },
+                { key: 'type', label: 'Type' },
+                { key: 'question', label: 'Question' },
+                { key: 'answers', label: 'Answers' },
+                { key: 'incorrect', label: 'Incorrect Answers' },
+                { key: 'description', label: 'Description' }
+            ];
+
+            dropdown.innerHTML = columns.map(col => `
+                <div class="column-option">
+                    <input 
+                        type="checkbox" 
+                        id="col-${col.key}" 
+                        data-column="${col.key}" 
+                        ${adminPreviewState.visibleColumns[col.key] ? 'checked' : ''}
+                    >
+                    <label for="col-${col.key}">${col.label}</label>
+                </div>
+            `).join('');
+
+            // Add event listeners
+            dropdown.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+                checkbox.addEventListener('change', (e) => {
+                    const column = e.target.dataset.column;
+                    adminPreviewState.visibleColumns[column] = e.target.checked;
+                    updateTableVisibility();
+                    localStorage.setItem('adminPreviewColumns', JSON.stringify(adminPreviewState.visibleColumns));
+                });
+            });
+        }
+
+        function updateTableVisibility() {
+            document.querySelectorAll('[data-column]').forEach(th => {
+                const column = th.dataset.column;
+                th.style.display = adminPreviewState.visibleColumns[column] ? '' : 'none';
+            });
+
+            document.querySelectorAll('tbody tr').forEach(tr => {
+                tr.querySelectorAll('td').forEach((td, idx) => {
+                    const columnNames = ['id', 'category', 'level', 'type', 'question', 'answers', 'incorrect', 'description'];
+                    const columnName = columnNames[idx];
+                    td.style.display = adminPreviewState.visibleColumns[columnName] ? '' : 'none';
+                });
+            });
+        }
+
+        // Initialize column resizing
+        function initColumnResizing() {
+            document.querySelectorAll('.resize-handle').forEach(handle => {
+                handle.addEventListener('mousedown', (e) => {
+                    const th = e.target.closest('th');
+                    const columnName = th.dataset.column;
+                    adminPreviewState.resizingColumn = columnName;
+                    adminPreviewState.resizeStartX = e.clientX;
+                    adminPreviewState.resizeStartWidth = th.offsetWidth;
+                    document.addEventListener('mousemove', onColumnResize);
+                    document.addEventListener('mouseup', stopColumnResize);
+                    e.preventDefault();
+                });
+            });
+        }
+
+        function onColumnResize(e) {
+            if (!adminPreviewState.resizingColumn) return;
+            const diff = e.clientX - adminPreviewState.resizeStartX;
+            const newWidth = Math.max(50, adminPreviewState.resizeStartWidth + diff);
+            adminPreviewState.columnWidths[adminPreviewState.resizingColumn] = newWidth;
+            applyColumnWidths();
+        }
+
+        function stopColumnResize() {
+            adminPreviewState.resizingColumn = null;
+            document.removeEventListener('mousemove', onColumnResize);
+            document.removeEventListener('mouseup', stopColumnResize);
+            localStorage.setItem('adminPreviewWidths', JSON.stringify(adminPreviewState.columnWidths));
+        }
+
+        function applyColumnWidths() {
+            Object.entries(adminPreviewState.columnWidths).forEach(([col, width]) => {
+                const style = document.createElement('style');
+                const placeholder = document.getElementById('column-width-styles');
+                if (placeholder) placeholder.remove();
+                
+                const newStyle = document.createElement('style');
+                newStyle.id = 'column-width-styles';
+                newStyle.textContent = Object.entries(adminPreviewState.columnWidths)
+                    .map(([col, width]) => `.col-${col} { width: ${width}px; }`)
+                    .join('\n');
+                document.head.appendChild(newStyle);
+            });
+        }
+
+        // Load saved preferences
+        function loadColumnPreferences() {
+            const saved = localStorage.getItem('adminPreviewColumns');
+            if (saved) {
+                adminPreviewState.visibleColumns = JSON.parse(saved);
+            }
+            const savedWidths = localStorage.getItem('adminPreviewWidths');
+            if (savedWidths) {
+                adminPreviewState.columnWidths = JSON.parse(savedWidths);
+            }
+        }
+
+        // Handle password submission
+        document.getElementById('submitAuthBtn').addEventListener('click', authenticateAdmin);
+        document.getElementById('adminPassword').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') authenticateAdmin();
+        });
+
+        async function authenticateAdmin() {
+            const password = document.getElementById('adminPassword').value;
+            const errorDiv = document.getElementById('authError');
+
+            if (!password) {
+                errorDiv.textContent = 'Password required';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    errorDiv.textContent = 'Invalid password';
+                    return;
+                }
+
+                adminPreviewState.adminToken = data.token;
+                adminPreviewState.isAuthenticated = true;
+                errorDiv.textContent = '';
+
+                // Show preview content and hide auth
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('previewContent').classList.remove('hidden');
+                document.getElementById('adminPassword').value = '';
+
+                // Load initial questions
+                loadAdminQuestions(0);
+
+            } catch (error) {
+                console.error('Error:', error);
+                errorDiv.textContent = 'Connection error';
+            }
+        }
+
+        // Load questions from API
+        async function loadAdminQuestions(page = 0) {
+            try {
+                const offset = page * adminPreviewState.pageSize;
+                let url = `/api/admin/questions/all?limit=${adminPreviewState.pageSize}&offset=${offset}`;
+
+                if (adminPreviewState.searchQuery) {
+                    url += `&search=${encodeURIComponent(adminPreviewState.searchQuery)}`;
+                }
+
+                const response = await fetch(url, {
+                    headers: { 'X-Admin-Token': adminPreviewState.adminToken }
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    console.error('Error loading questions:', data.error);
+                    return;
+                }
+
+                adminPreviewState.questions = data.questions;
+                adminPreviewState.currentPage = page;
+                adminPreviewState.totalQuestions = data.total;
+                adminPreviewState.hasMore = data.hasMore;
+
+                renderTable();
+                updatePagination();
+
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        // Render table
+        function renderTable() {
+            const tbody = document.getElementById('adminPreviewBody');
+            tbody.innerHTML = '';
+
+            if (adminPreviewState.questions.length === 0) {
+                tbody.innerHTML = '<tr class="loading-row"><td colspan="8">No questions found</td></tr>';
+                return;
+            }
+
+            adminPreviewState.questions.forEach((q) => {
+                const row = document.createElement('tr');
+
+                const answers = Array.isArray(q.Answers) ? q.Answers.join(', ') : q.Answers || '-';
+                const incorrect = Array.isArray(q.IncorrectAnswers) ? q.IncorrectAnswers.join(', ') : q.IncorrectAnswers || '-';
+
+                row.innerHTML = `
+                    <td class="col-id" title="${q.id}">${q.id}</td>
+                    <td class="col-category" title="${q.Category}">${q.Category}</td>
+                    <td class="col-level" title="${q.Difficulty}">${q.Difficulty}</td>
+                    <td class="col-type" title="${q.Type}">${q.Type}</td>
+                    <td class="col-question" title="${q.Question}">${q.Question}</td>
+                    <td class="col-answers" title="${answers}">${answers}</td>
+                    <td class="col-incorrect" title="${incorrect}">${incorrect}</td>
+                    <td class="col-description" title="${q.Description || '-'}">${q.Description || '-'}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+
+            const count = adminPreviewState.totalQuestions;
+            document.getElementById('previewCount').textContent = `${count} ${count === 1 ? 'question' : 'questions'}`;
+            
+            // Apply visibility and resizing
+            updateTableVisibility();
+            applyColumnWidths();
+            initColumnResizing();
+        }
+
+        // Update pagination
+        function updatePagination() {
+            const prevBtn = document.getElementById('previewPrevBtn');
+            const nextBtn = document.getElementById('previewNextBtn');
+            const paginationInfo = document.getElementById('paginationInfo');
+
+            prevBtn.disabled = adminPreviewState.currentPage === 0;
+            nextBtn.disabled = !adminPreviewState.hasMore;
+
+            const start = adminPreviewState.currentPage * adminPreviewState.pageSize + 1;
+            const end = Math.min((adminPreviewState.currentPage + 1) * adminPreviewState.pageSize, adminPreviewState.totalQuestions);
+
+            paginationInfo.textContent = `${start} - ${end} / ${adminPreviewState.totalQuestions}`;
+        }
+
+        // Event listeners
+        document.getElementById('adminPreviewSearch').addEventListener('input', (e) => {
+            adminPreviewState.searchQuery = e.target.value;
+            adminPreviewState.currentPage = 0;
+            loadAdminQuestions(0);
+        });
+
+        document.getElementById('previewPrevBtn').addEventListener('click', () => {
+            if (adminPreviewState.currentPage > 0) {
+                loadAdminQuestions(adminPreviewState.currentPage - 1);
+                document.querySelector('.admin-preview-table-wrap').scrollTop = 0;
+            }
+        });
+
+        document.getElementById('previewNextBtn').addEventListener('click', () => {
+            if (adminPreviewState.hasMore) {
+                loadAdminQuestions(adminPreviewState.currentPage + 1);
+                document.querySelector('.admin-preview-table-wrap').scrollTop = 0;
+            }
+        });
+
+        // Column selector toggle
+        document.getElementById('columnSelectorBtn').addEventListener('click', () => {
+            const dropdown = document.getElementById('columnSelectorDropdown');
+            dropdown.classList.toggle('hidden');
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#columnSelectorBtn') && !e.target.closest('#columnSelectorDropdown')) {
+                document.getElementById('columnSelectorDropdown').classList.add('hidden');
+            }
+        });
+
+        // Auto-focus password input
+        window.addEventListener('load', () => {
+            document.getElementById('adminPassword').focus();
+            loadColumnPreferences();
+            initColumnSelector();
+        });
+    </script>
+</body>
+</html>

@@ -3698,6 +3698,214 @@ body.presentation-mode .jeopardy-board {
     flex: 1;
 }
 
+/* ==================== ADMIN PREVIEW MODAL ==================== */
+.admin-preview-modal {
+    max-width: 1200px;
+    width: 95vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px;
+}
+
+.admin-preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1rem;
+}
+
+.admin-preview-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--accent-primary);
+}
+
+.admin-preview-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.search-box {
+    flex: 1;
+    min-width: 250px;
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.admin-preview-search {
+    width: 100%;
+    padding: 0.5rem 0.75rem 0.5rem 2rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    transition: all var(--transition-fast);
+}
+
+.admin-preview-search:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.search-icon {
+    position: absolute;
+    left: 0.6rem;
+    color: var(--text-muted);
+    font-size: 1rem;
+    pointer-events: none;
+}
+
+.preview-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    white-space: nowrap;
+}
+
+.preview-count {
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+.admin-preview-table-wrap {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    background: var(--bg-primary);
+}
+
+.admin-preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.admin-preview-table thead {
+    background: var(--bg-tertiary);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.admin-preview-table th {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-align: left;
+    white-space: nowrap;
+    user-select: none;
+    position: relative;
+}
+
+.admin-preview-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(139, 92, 246, 0.1);
+    color: var(--text-primary);
+    word-break: break-word;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.admin-preview-table tbody tr {
+    transition: background-color var(--transition-fast);
+}
+
+.admin-preview-table tbody tr:hover {
+    background-color: var(--bg-secondary);
+}
+
+.admin-preview-table tbody tr:nth-child(even) {
+    background-color: rgba(139, 92, 246, 0.03);
+}
+
+/* Resize handles */
+.resize-handle {
+    display: none;
+    position: absolute;
+    right: -5px;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    cursor: col-resize;
+    user-select: none;
+}
+
+.admin-preview-table th:hover .resize-handle {
+    display: block;
+    background: linear-gradient(90deg, transparent, var(--accent-primary));
+    opacity: 0.5;
+}
+
+/* Column sizing */
+.col-id {
+    width: 80px;
+}
+
+.col-category {
+    width: 120px;
+}
+
+.col-difficulty {
+    width: 70px;
+}
+
+.col-type {
+    width: 100px;
+}
+
+.col-question {
+    width: 250px;
+}
+
+.col-answers {
+    width: 150px;
+}
+
+.col-incorrect {
+    width: 180px;
+}
+
+.col-description {
+    width: 200px;
+}
+
+.loading-row td {
+    padding: 2rem 1rem;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.admin-preview-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.pagination-info {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    min-width: 80px;
+    text-align: center;
+}
+
 .admin-tab-content {
     display: none;
 }

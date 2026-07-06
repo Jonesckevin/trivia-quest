@@ -267,6 +267,64 @@ def update_admin_config():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/admin/questions/all', methods=['GET'])
+@require_admin
+def get_all_questions_admin():
+    """Get all questions for admin preview. Returns full question data."""
+    try:
+        db = get_db()
+        limit = min(int(request.args.get('limit', MAX_QUESTIONS_PER_REQUEST)), MAX_QUESTIONS_PER_REQUEST)
+        offset = int(request.args.get('offset', 0))
+        search = request.args.get('search', '')
+        
+        base_query = 'SELECT * FROM questions WHERE 1=1'
+        params = []
+        
+        if search:
+            search_term = f'%{sanitize_input(search)}%'
+            base_query += ' AND (question LIKE ? OR answers LIKE ? OR incorrect_answers LIKE ? OR description LIKE ? OR subcategory LIKE ?)'
+            params.extend([search_term, search_term, search_term, search_term, search_term])
+        
+        # Get total count
+        count_query = f'SELECT COUNT(*) as total FROM ({base_query})'
+        total = db.execute(count_query, params).fetchone()['total']
+        
+        # Get paginated results
+        query = base_query + ' ORDER BY id LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        
+        cursor = db.execute(query, params)
+        
+        questions = []
+        for row in cursor.fetchall():
+            try:
+                question_obj = {
+                    'id': row['id'],
+                    'Category': row['subcategory'] or 'Uncategorized',
+                    'Difficulty': row['difficulty'],
+                    'Type': row['question_type'],
+                    'Question': row['question'],
+                    'Answers': json.loads(row['answers']) if row['answers'] else [],
+                    'IncorrectAnswers': json.loads(row['incorrect_answers']) if row['incorrect_answers'] else [],
+                    'Description': row['description'] or '',
+                    'RegEx': row['regex_pattern'] or '',
+                    'RegExDescription': row['regex_description'] or ''
+                }
+                questions.append(question_obj)
+            except json.JSONDecodeError:
+                continue
+        
+        return jsonify({
+            'success': True,
+            'questions': questions,
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'hasMore': (offset + limit) < total
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # =============================================================================
 # Categories & Questions (existing)
 # =============================================================================
