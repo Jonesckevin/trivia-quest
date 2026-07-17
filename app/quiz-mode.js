@@ -8,6 +8,7 @@
     const quizState = {
         config: null,           // { freeplay, requireUserPassword, appTitle }
         user: null,             // { id, username }
+        userToken: null,        // JWT for authenticated user API calls
         adminToken: null,
         activeSession: null,    // session object with questions
         quizQuestions: [],       // ordered questions for current quiz
@@ -32,8 +33,35 @@
 
     async function api(path, options = {}) {
         const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-        if (quizState.adminToken) headers['X-Admin-Token'] = quizState.adminToken;
-        const resp = await fetch(`/api${path}`, { ...options, headers });
+        if (quizState.adminToken) {
+            // Admin token takes priority — never send user JWT alongside it
+            headers['X-Admin-Token'] = quizState.adminToken;
+        } else if (quizState.userToken) {
+            headers['Authorization'] = `Bearer ${quizState.userToken}`;
+        }
+        const resp = await fetch(`/api${path}`, { ...options, headers, cache: 'no-store' });
+
+        // Handle expired / invalid tokens gracefully
+        if (resp.status === 401) {
+            const isAdminCall = !!quizState.adminToken && headers['X-Admin-Token'];
+            if (isAdminCall) {
+                // Admin token expired — clear it and show re-login modal
+                quizState.adminToken = null;
+                sessionStorage.removeItem('tq_admin_token');
+                showToast('Admin session expired. Please log in again.', 'error');
+                setTimeout(() => show($('adminLoginModal')), 300);
+            } else {
+                // User token expired — sign out
+                quizState.user = null;
+                quizState.userToken = null;
+                sessionStorage.removeItem('tq_user');
+                sessionStorage.removeItem('tq_user_token');
+                showToast('Session expired. Please sign in again.', 'error');
+                setTimeout(() => showAuthScreen(), 300);
+            }
+            return { success: false, error: 'Session expired' };
+        }
+
         if (path.includes('/export') && resp.ok) return resp;
         return resp.json();
     }
@@ -70,6 +98,10 @@
             // Restore admin token from sessionStorage
             const savedToken = sessionStorage.getItem('tq_admin_token');
             if (savedToken) quizState.adminToken = savedToken;
+
+            // Restore user JWT from sessionStorage
+            const savedUserToken = sessionStorage.getItem('tq_user_token');
+            if (savedUserToken) quizState.userToken = savedUserToken;
 
             // Restore user from sessionStorage
             const savedUser = sessionStorage.getItem('tq_user');
@@ -171,7 +203,9 @@
                 const data = await api('/register', { method: 'POST', body: JSON.stringify(body) });
                 if (data.success) {
                     quizState.user = data.user;
+                    quizState.userToken = data.token || null;
                     sessionStorage.setItem('tq_user', JSON.stringify(data.user));
+                    if (data.token) sessionStorage.setItem('tq_user_token', data.token);
                     updateNav();
                     loadAndStartQuiz();
                 } else {
@@ -196,7 +230,9 @@
                 const data = await api('/login', { method: 'POST', body: JSON.stringify(body) });
                 if (data.success) {
                     quizState.user = data.user;
+                    quizState.userToken = data.token || null;
                     sessionStorage.setItem('tq_user', JSON.stringify(data.user));
+                    if (data.token) sessionStorage.setItem('tq_user_token', data.token);
                     updateNav();
                     loadAndStartQuiz();
                 } else {
@@ -237,9 +273,19 @@
         $('navProfile')?.addEventListener('click', openProfile);
 
         function signOut() {
+            // Revoke the active token server-side before clearing it locally
+            const tokenToRevoke = quizState.userToken || quizState.adminToken;
+            if (tokenToRevoke) {
+                fetch('/api/logout', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${tokenToRevoke}`, 'Content-Type': 'application/json' }
+                }).catch(() => {}); // fire-and-forget; local clear always happens
+            }
             quizState.user = null;
+            quizState.userToken = null;
             quizState.adminToken = null;
             sessionStorage.removeItem('tq_user');
+            sessionStorage.removeItem('tq_user_token');
             sessionStorage.removeItem('tq_admin_token');
             quizState.answeredIds.clear();
             quizState.answeredCount = 0;
@@ -688,8 +734,14 @@
             }
         });
 
-        // Logout (admin only — clears admin token, returns to auth/quiz)
+        // Logout (admin only — revokes token then returns to auth/quiz)
         $('adminLogoutBtn')?.addEventListener('click', () => {
+            if (quizState.adminToken) {
+                fetch('/api/logout', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${quizState.adminToken}`, 'Content-Type': 'application/json' }
+                }).catch(() => {});
+            }
             quizState.adminToken = null;
             sessionStorage.removeItem('tq_admin_token');
             showToast('Logged out of admin');
@@ -749,6 +801,20 @@
         $('editUserCancelBtn')?.addEventListener('click', () => hide($('adminEditUserModal')));
         $('editUserSaveBtn')?.addEventListener('click', saveEditUser);
 
+        // Admin create-user modal
+        $('createUserBtn')?.addEventListener('click', openCreateUserModal);
+        $('createUserCancelBtn')?.addEventListener('click', () => hide($('adminCreateUserModal')));
+        $('createUserSaveBtn')?.addEventListener('click', saveCreateUser);
+        $('createUserUsername')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('createUserSaveBtn').click(); });
+
+        // Admin reset-password modal
+        $('resetPwCancelBtn')?.addEventListener('click', () => hide($('adminResetPwModal')));
+        $('resetPwSaveBtn')?.addEventListener('click', saveResetPassword);
+        $('resetPwConfirm')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('resetPwSaveBtn').click(); });
+
+        // User history modal
+        $('userHistoryCloseBtn')?.addEventListener('click', () => hide($('userHistoryModal')));
+
         // Quiz next button
         $('quizNextBtn')?.addEventListener('click', () => {
             // Record deferred hidden-question answer before advancing
@@ -802,12 +868,20 @@
             const data = await api('/admin/sessions');
             if (!data.success) return;
             renderSessionsList(data.sessions);
+            await loadSessionFilter(); // keep dropdown in sync too
         } catch (e) {
             console.error('Failed to load sessions:', e);
         }
     }
 
     function renderSessionsList(sessions) {
+        // --- Always sync the top indicator and tab badge ---
+        const activeSession = sessions?.find(s => s.isActive);
+        const indicator = $('adminActiveSession');
+        if (indicator) indicator.textContent = activeSession ? `Active: ${activeSession.name}` : 'No active session';
+        const sessionBadge = $('badgeSessions');
+        if (sessionBadge) sessionBadge.textContent = sessions?.length > 0 ? sessions.length : '';
+
         const container = $('sessionsList');
         if (!sessions || sessions.length === 0) {
             container.innerHTML = '<p class="empty-state">No sessions created yet. Click "+ New Session" to create one.</p>';
@@ -899,7 +973,6 @@
                 hide($('sessionFormCard'));
                 showToast(quizState.editingSessionId ? 'Session updated' : 'Session created');
                 await loadSessions();
-                await loadSessionFilter();
             } else {
                 showToast(data.error || 'Failed to save session', 'error');
             }
@@ -915,7 +988,6 @@
             if (data.success) {
                 showToast('Session activated');
                 await loadSessions();
-                await loadSessionFilter();
             } else {
                 showToast(data.error || 'Failed to activate session', 'error');
             }
@@ -925,7 +997,6 @@
             if (data.success) {
                 showToast('Session deactivated');
                 await loadSessions();
-                await loadSessionFilter();
             } else {
                 showToast(data.error || 'Failed to deactivate session', 'error');
             }
@@ -961,7 +1032,6 @@
             if (data.success) {
                 showToast('Session deleted');
                 await loadSessions();
-                await loadSessionFilter();
             } else {
                 showToast(data.error || 'Failed to delete session', 'error');
             }
@@ -1037,6 +1107,9 @@
                 sv('statAvgScore', avgScore + '%');
                 sv('statPassRate', passRate + '%');
                 sv('statTotalQuestions', totalAnswers);
+                // Keep results badge in sync
+                const resBadge = $('badgeResults');
+                if (resBadge) resBadge.textContent = totalQuizzes > 0 ? totalQuizzes : '';
 
                 // Render charts in separate try/catch so table still renders if Chart.js fails
                 try { renderCharts(s); } catch (chartErr) {
@@ -1217,6 +1290,9 @@
             // Populate user stat cards
             const sv = (id, v) => { const el = $(id); if (el) el.textContent = v; };
             sv('statTotalUsers', users.length);
+            // Keep tab badge in sync
+            const badge = $('badgeUsers');
+            if (badge) badge.textContent = users.length > 0 ? users.length : '';
             const weekAgo = Date.now() - 7 * 86400000;
             const activeCount = users.filter(u => u.lastActive && new Date(u.lastActive).getTime() > weekAgo).length;
             sv('statActiveUsers', activeCount);
@@ -1257,8 +1333,9 @@
                         <span class="ur-score score-badge ${scoreClass}">${avgScoreVal}% avg</span>
                     </div>
                     <div class="user-row-actions ul-col ul-col-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="window._quizAdmin.viewUserHistory(${u.id}, '${escapeHtml(u.username)}')" title="Quiz History">📋</button>
                         <button class="btn btn-secondary btn-sm" onclick="window._quizAdmin.editUser(${u.id})" title="Edit">✏️</button>
-                        <button class="btn btn-secondary btn-sm" onclick="window._quizAdmin.resetPassword(${u.id}, '${escapeHtml(u.username)}')" title="Reset Password">🔑</button>
+                        <button class="btn btn-secondary btn-sm" onclick="window._quizAdmin.openResetPassword(${u.id}, '${escapeHtml(u.username)}')" title="Reset Password">🔑</button>
                         <button class="btn btn-danger btn-sm" onclick="window._quizAdmin.deleteUser(${u.id}, '${escapeHtml(u.username)}')" title="Delete">🗑️</button>
                     </div>
                 </div>`;
@@ -1279,17 +1356,103 @@
         }
     };
 
-    window._quizAdmin.resetPassword = async (id, username) => {
-        const newPw = prompt(`Enter new password for "${username}":`);
-        if (!newPw) return;
-        if (newPw.length < 3) return showToast('Password too short (min 3 chars)', 'error');
+    // Open the styled reset-password modal
+    window._quizAdmin.openResetPassword = (id, username) => {
+        $('resetPwUserId').value = id;
+        $('resetPwUsername').textContent = `User: ${username}`;
+        $('resetPwNew').value = '';
+        $('resetPwConfirm').value = '';
+        hide($('resetPwError'));
+        show($('adminResetPwModal'));
+        setTimeout(() => $('resetPwNew')?.focus(), 50);
+    };
+
+    async function saveResetPassword() {
+        const id = $('resetPwUserId').value;
+        const newPw = $('resetPwNew').value;
+        const confirm_ = $('resetPwConfirm').value;
+        if (!newPw) return showModalError('resetPwError', 'Password is required');
+        if (newPw !== confirm_) return showModalError('resetPwError', 'Passwords do not match');
         const data = await api(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify({ password: newPw }) });
         if (data.success) {
-            showToast(`Password reset for ${username}`);
+            hide($('adminResetPwModal'));
+            showToast('Password reset successfully');
         } else {
-            showToast(data.error || 'Failed to reset password', 'error');
+            showModalError('resetPwError', data.error || 'Failed to reset password');
+        }
+    }
+
+    function openCreateUserModal() {
+        ['createUserUsername', 'createUserPassword', 'createUserDisplayName',
+         'createUserEmail', 'createUserRole', 'createUserOrg'].forEach(id => {
+            const el = $(id);
+            if (el) el.value = '';
+        });
+        hide($('createUserError'));
+        show($('adminCreateUserModal'));
+        setTimeout(() => $('createUserUsername')?.focus(), 50);
+    }
+
+    async function saveCreateUser() {
+        const username = ($('createUserUsername').value || '').trim();
+        if (!username) return showModalError('createUserError', 'Username is required');
+        const body = {
+            username,
+            password: ($('createUserPassword').value || '').trim() || undefined,
+            displayName: ($('createUserDisplayName').value || '').trim() || undefined,
+            email: ($('createUserEmail').value || '').trim() || undefined,
+            role: ($('createUserRole').value || '').trim() || undefined,
+            organization: ($('createUserOrg').value || '').trim() || undefined,
+        };
+        const data = await api('/admin/users', { method: 'POST', body: JSON.stringify(body) });
+        if (data.success) {
+            hide($('adminCreateUserModal'));
+            showToast(`User "${data.username}" created`);
+            await loadUsers();
+        } else {
+            showModalError('createUserError', data.error || 'Failed to create user');
+        }
+    }
+
+    // View a user's quiz history
+    window._quizAdmin.viewUserHistory = async (userId, username) => {
+        $('userHistoryTitle').textContent = `${username}'s Quiz History`;
+        $('userHistoryBody').innerHTML = '<p class="empty-state">Loading…</p>';
+        show($('userHistoryModal'));
+        try {
+            const data = await api(`/admin/results?userId=${userId}`);
+            if (!data.success || !data.results || data.results.length === 0) {
+                $('userHistoryBody').innerHTML = '<p class="empty-state">No quiz results recorded yet.</p>';
+                return;
+            }
+            $('userHistoryBody').innerHTML = `
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Session</th><th>Score</th><th>Correct</th><th>Time</th><th>Date</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        ${data.results.map(r => `
+                            <tr>
+                                <td>${escapeHtml(r.sessionName)}</td>
+                                <td><span class="score-badge ${r.percentage >= 70 ? 'good' : r.percentage >= 50 ? 'ok' : 'low'}">${r.percentage}%</span></td>
+                                <td>${r.correctAnswers}/${r.totalQuestions}</td>
+                                <td>${r.totalTimeSeconds ? Math.round(r.totalTimeSeconds) + 's' : '—'}</td>
+                                <td>${r.completedAt ? new Date(r.completedAt).toLocaleDateString() : '—'}</td>
+                                <td><button class="btn btn-secondary btn-sm" onclick="window._quizAdmin.viewUserAnswers(${r.userId}, ${r.sessionId}, '${escapeHtml(username)}')">Answers</button></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        } catch (e) {
+            $('userHistoryBody').innerHTML = '<p class="empty-state">Failed to load history.</p>';
         }
     };
+
+    function showModalError(id, msg) {
+        const el = $(id);
+        if (el) { el.textContent = msg; show(el); }
+    }
 
     // ==================== USER PROFILE ====================
     async function openProfile() {

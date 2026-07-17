@@ -1,5 +1,5 @@
 // Service Worker for Trivia Quest - Offline PWA Support
-const CACHE_NAME = 'trivia-quest-v2';
+const CACHE_NAME = 'trivia-quest-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -72,24 +72,33 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - serve from cache, fallback to network
+// Fetch event - cache-first for static assets, always network for API
 self.addEventListener('fetch', (event) => {
-  // Skip non-GET requests
+  // Skip non-GET requests (POST, PUT, DELETE etc. bypass SW entirely)
   if (event.request.method !== 'GET') {
     return;
   }
-  
-  // Skip chrome-extension and other non-http requests
+
+  // Skip non-http requests
   if (!event.request.url.startsWith('http')) {
     return;
   }
-  
+
+  const url = new URL(event.request.url);
+
+  // ---- API routes: ALWAYS fetch from network, NEVER cache ----
+  // This ensures activate/deactivate/create/delete changes are always reflected.
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // ---- Static assets: cache-first, update in background ----
   event.respondWith(
     caches.match(event.request)
       .then((cachedResponse) => {
-        // Return cached version if available
         if (cachedResponse) {
-          // Fetch updated version in background (stale-while-revalidate)
+          // Return cached version immediately and refresh in background
           event.waitUntil(
             fetch(event.request)
               .then((networkResponse) => {
@@ -98,17 +107,14 @@ self.addEventListener('fetch', (event) => {
                     .then((cache) => cache.put(event.request, networkResponse));
                 }
               })
-              .catch(() => {
-                // Network failed, but we already have cached version
-              })
+              .catch(() => {})
           );
           return cachedResponse;
         }
-        
-        // Not in cache, fetch from network
+
+        // Not in cache — fetch from network and cache successful responses
         return fetch(event.request)
           .then((networkResponse) => {
-            // Cache successful responses for future use
             if (networkResponse && networkResponse.ok) {
               const responseToCache = networkResponse.clone();
               caches.open(CACHE_NAME)
@@ -118,8 +124,6 @@ self.addEventListener('fetch', (event) => {
           })
           .catch((error) => {
             console.log('[Service Worker] Fetch failed:', error);
-            
-            // For HTML requests, return a basic offline page
             if (event.request.headers.get('accept')?.includes('text/html')) {
               return new Response(
                 `<!DOCTYPE html>

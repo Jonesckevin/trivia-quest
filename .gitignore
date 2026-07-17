@@ -1,56 +1,11 @@
 docs/
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 .venv
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-.env
-.env.local
-.env.*.local
-
-# Testing
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-.tox/
-.hypothesis/
-.mypy_cache/
-.dmypy.json
-dmypy.json
 
 # Database
 data/
@@ -63,86 +18,19 @@ data/
 # Logs
 logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Docker
-.docker/
-docker-compose.override.yml
-
-# Node (if frontend tooling added)
-node_modules/
-package-lock.json
-yarn.lock
-
-# OS
-Thumbs.db
-.DS_Store
-
-# Backups
-*.bak
-*.backup
-*.tmp
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
-
-# IDE temporary files
-.vscode/settings.json
-.idea/workspace.xml
 
 # Secrets
 .env
 .env.production
 secrets/
 
-# Development/Test Files
-api/tests/
-tests/
-test_*.py
-*_test.py
-.pytest.ini
-pytest.ini
-conftest.py
-
-# Development Configurations
-docker-compose.dev.yml
-docker-compose.override.yml
-.editorconfig.local
-.pre-commit-config.yaml
-
-# Development Dependencies
-requirements-dev.txt
-requirements-test.txt
-setup-dev.py
-
 # Local Development Database
 data/questions.db
 data/*.db
 
-# GitHub/CI/CD (non-production)
-.github/
-.gitlab-ci.yml
-.travis.yml
-Jenkinsfile
-.circleci/
-
-# Build & Development Tools
-Makefile
-makefile
-build-local.sh
-dev-setup.sh
-
 # Development Temp Files
 .tmp/
 temp/
-*.swp
-*.swo
-*~
-.cache/
 
 # Development Server & Backup Files
 dev-server.py
@@ -153,41 +41,13 @@ server.py.bak
 # Docker Upload Documentation
 dockerupload.gitignore
 
-# Frontend Development
-node_modules/
-dist/
-.webpack/
-.parcel-cache/
-
-# Python Development
-.ipynb_checkpoints/
-*.ipynb
-.pylintrc
-.flake8
-setup.cfg
-
 # API Documentation (auto-generated)
 docs/_build/
 docs/.generated/
 
-# Coverage Reports
-.coverage.json
-coverage.xml
-htmlcov/
-
 # Local Admin/Debug Scripts
-scripts/debug*.py
-scripts/test*.py
-scripts/regenerate_ids.py
-scripts/reorder_jsonl.py
-scripts/add_descriptions.py
-*.local.py
+scripts/*
+!scripts/build_database.py
 *.key
 *.pem
 *.swo
-
-# OS files
-.DS_Store
-Thumbs.db
-
-data/

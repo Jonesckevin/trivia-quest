@@ -735,12 +735,85 @@
                 </div>
                 <div class="form-group">
                     <label for="editUserPassword">New Password <small>(leave blank to keep current)</small></label>
-                    <input type="password" id="editUserPassword" placeholder="New password...">
+                    <input type="password" id="editUserPassword" placeholder="New password..." autocomplete="new-password">
                 </div>
                 <p class="quiz-auth-error hidden" id="editUserError"></p>
                 <div class="modal-actions">
                     <button class="btn btn-primary" id="editUserSaveBtn">Save Changes</button>
                     <button class="btn btn-secondary" id="editUserCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin Create User Modal -->
+        <div class="modal-overlay hidden" id="adminCreateUserModal" role="dialog" aria-modal="true">
+            <div class="modal-content" style="max-width:460px">
+                <h2 style="margin-bottom:1rem">➕ Create User</h2>
+                <div class="form-group">
+                    <label for="createUserUsername">Username <span style="color:var(--destructive)">*</span></label>
+                    <input type="text" id="createUserUsername" placeholder="e.g. jsmith" maxlength="32" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="createUserPassword">Password <span id="createUserPwOptional" style="color:var(--text-muted);font-weight:400">(optional)</span></label>
+                    <input type="password" id="createUserPassword" placeholder="Password..." maxlength="128" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="createUserDisplayName">Display Name</label>
+                    <input type="text" id="createUserDisplayName" placeholder="Display name" maxlength="50">
+                </div>
+                <div class="form-group">
+                    <label for="createUserEmail">Email</label>
+                    <input type="email" id="createUserEmail" placeholder="Email" maxlength="100">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="createUserRole">Role</label>
+                        <input type="text" id="createUserRole" placeholder="Role" maxlength="50">
+                    </div>
+                    <div class="form-group">
+                        <label for="createUserOrg">Organization</label>
+                        <input type="text" id="createUserOrg" placeholder="Organization" maxlength="100">
+                    </div>
+                </div>
+                <p class="quiz-auth-error hidden" id="createUserError"></p>
+                <div class="modal-actions">
+                    <button class="btn btn-primary" id="createUserSaveBtn">Create User</button>
+                    <button class="btn btn-secondary" id="createUserCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin Reset Password Modal -->
+        <div class="modal-overlay hidden" id="adminResetPwModal" role="dialog" aria-modal="true">
+            <div class="modal-content" style="max-width:400px">
+                <h2 style="margin-bottom:0.25rem">🔑 Reset Password</h2>
+                <p id="resetPwUsername" style="margin-bottom:1rem;color:var(--text-muted)"></p>
+                <input type="hidden" id="resetPwUserId">
+                <div class="form-group">
+                    <label for="resetPwNew">New Password</label>
+                    <input type="password" id="resetPwNew" placeholder="New password..." maxlength="128" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="resetPwConfirm">Confirm Password</label>
+                    <input type="password" id="resetPwConfirm" placeholder="Confirm password..." maxlength="128" autocomplete="new-password">
+                </div>
+                <p class="quiz-auth-error hidden" id="resetPwError"></p>
+                <div class="modal-actions">
+                    <button class="btn btn-primary" id="resetPwSaveBtn">Set Password</button>
+                    <button class="btn btn-secondary" id="resetPwCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Quiz History Modal (admin) -->
+        <div class="modal-overlay hidden" id="userHistoryModal" role="dialog" aria-modal="true">
+            <div class="modal-content" style="max-width:680px;max-height:82vh;overflow-y:auto">
+                <div class="modal-header">
+                    <h2 id="userHistoryTitle">Quiz History</h2>
+                    <button class="btn btn-secondary btn-icon" id="userHistoryCloseBtn">&times;</button>
+                </div>
+                <div id="userHistoryBody" style="margin-top:1rem">
+                    <p class="empty-state">Loading…</p>
                 </div>
             </div>
         </div>
@@ -935,8 +1008,9 @@
                     </div>
                     <div class="admin-section-header">
                         <h2>Registered Users</h2>
-                        <div class="admin-search-wrap">
+                        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
                             <input type="text" id="userSearchInput" class="admin-search" placeholder="Search users...">
+                            <button class="btn btn-primary btn-sm" id="createUserBtn">➕ New User</button>
                         </div>
                     </div>
                     <div class="users-list">

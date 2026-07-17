@@ -11,39 +11,325 @@ import re
 import csv
 import io
 import hashlib
+import hmac
+import uuid
+import time
+import threading
+import logging
+import mimetypes
 from datetime import datetime
 from functools import wraps
+import jwt
+import bcrypt
+from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask import Flask, jsonify, request, g, Response
 from flask_cors import CORS
+from flask_socketio import SocketIO
 
 app = Flask(__name__)
 
+# =============================================================================
 # Configuration
+# =============================================================================
 DATABASE_PATH = os.environ.get('DATABASE_PATH', '/data/questions.db')
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*').split(',')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 FREEPLAY_DEFAULT = os.environ.get('FREEPLAY', 'false').lower() == 'true'
 REQUIRE_USER_PASSWORD = os.environ.get('REQUIRE_USER_PASSWORD', 'false').lower() == 'true'
+USER_PASSWORD_MIN_LENGTH = int(os.environ.get('USER_PASSWORD_MIN_LENGTH', '8'))
 MAX_QUESTIONS_PER_REQUEST = 500
 
+# JWT
+JWT_SECRET = os.environ.get('JWT_SECRET') or os.urandom(32).hex()
+JWT_TTL = int(os.environ.get('JWT_TTL_SECONDS', '86400'))
+JWT_ISSUER = 'trivia-quest'
+
+# Rate limiting
+LOGIN_RATE_MAX = int(os.environ.get('LOGIN_RATE_MAX', '5'))
+LOGIN_RATE_WINDOW = int(os.environ.get('LOGIN_RATE_WINDOW', '900'))
+REG_RATE_MAX = int(os.environ.get('REG_RATE_MAX', '3'))
+REG_RATE_WINDOW = int(os.environ.get('REG_RATE_WINDOW', '3600'))
+
+# Proxy & upload
+TRUST_PROXY = os.environ.get('TRUST_PROXY', 'false').lower() == 'true'
+MAX_UPLOAD_MB = int(os.environ.get('MAX_UPLOAD_MB', '25'))
+ALLOWED_UPLOAD_EXTENSIONS = {'.jsonl', '.json', '.csv'}
+
+# CORS
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in
+    os.environ.get('CORS_ALLOWED_ORIGINS', os.environ.get('ALLOWED_ORIGINS', '*')).split(',')
+    if o.strip()
+]
+
+# Flask security config
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_MB * 1024 * 1024
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(32).hex()
+
+# Proxy trust — use Werkzeug's ProxyFix instead of manual header parsing
+if TRUST_PROXY:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
 # Security: Configure CORS
-CORS(app, origins=ALLOWED_ORIGINS, methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
+CORS(app, origins=CORS_ALLOWED_ORIGINS, methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+     supports_credentials=False)
+
+# WebSocket / Socket.IO — security-hardened
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=CORS_ALLOWED_ORIGINS,
+    ping_timeout=60,
+    ping_interval=25,
+    max_http_buffer_size=1 * 1024 * 1024,  # 1 MB max WS message
+    async_mode='threading',
+    logger=False,
+    engineio_logger=False,
+)
+
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Security Middleware
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# Rate limiting — sliding-window, failures-only for login (per live-translate)
+# ---------------------------------------------------------------------------
+_login_failures: dict = {}     # ip -> [timestamps of recent failures]
+_register_attempts: dict = {}  # ip -> [timestamps of recent attempts]
+_rl_lock = threading.Lock()
+
+
+def _login_rate_ok(ip: str) -> bool:
+    now = time.time()
+    with _rl_lock:
+        recent = [t for t in _login_failures.get(ip, []) if now - t < LOGIN_RATE_WINDOW]
+        _login_failures[ip] = recent
+        return len(recent) < LOGIN_RATE_MAX
+
+
+def _record_login_failure(ip: str) -> None:
+    with _rl_lock:
+        _login_failures.setdefault(ip, []).append(time.time())
+
+
+def _reset_login_failures(ip: str) -> None:
+    with _rl_lock:
+        _login_failures.pop(ip, None)
+
+
+def _register_rate_ok(ip: str) -> bool:
+    now = time.time()
+    with _rl_lock:
+        recent = [t for t in _register_attempts.get(ip, []) if now - t < REG_RATE_WINDOW]
+        _register_attempts[ip] = recent
+        return len(recent) < REG_RATE_MAX
+
+
+def _record_register_attempt(ip: str) -> None:
+    with _rl_lock:
+        _register_attempts.setdefault(ip, []).append(time.time())
+
+
+# ---------------------------------------------------------------------------
+# Token revocation — direct DB access (no request context needed in decorators)
+# ---------------------------------------------------------------------------
+def _revocation_connect():
+    conn = sqlite3.connect(DATABASE_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    return conn
+
+
+def _ensure_revocation_table() -> None:
+    try:
+        with _revocation_connect() as conn:
+            conn.execute(
+                'CREATE TABLE IF NOT EXISTS revoked_tokens ('
+                '  jti TEXT PRIMARY KEY,'
+                '  expires_at INTEGER NOT NULL'
+                ')'
+            )
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+def _is_token_revoked(jti: str) -> bool:
+    if not jti:
+        return False
+    try:
+        with _revocation_connect() as conn:
+            return conn.execute(
+                'SELECT 1 FROM revoked_tokens WHERE jti = ?', (jti,)
+            ).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False  # table not yet created — treat as not revoked
+
+
+def _revoke_token(jti: str, exp: int) -> None:
+    if not jti:
+        return
+    try:
+        with _revocation_connect() as conn:
+            conn.execute(
+                'INSERT OR REPLACE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)',
+                (jti, int(exp or 0))
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _cleanup_revoked_tokens() -> None:
+    """Remove revocation entries whose JWTs have already expired."""
+    try:
+        with _revocation_connect() as conn:
+            conn.execute('DELETE FROM revoked_tokens WHERE expires_at < ?', (int(time.time()),))
+            conn.commit()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Password helpers — bcrypt with SHA256 legacy fallback for migration
+# ---------------------------------------------------------------------------
+_USERNAME_RE = re.compile(r'^[A-Za-z0-9_.\-]{3,32}$')
+
+
+def _validate_username(username: str) -> str | None:
+    if not isinstance(username, str) or not _USERNAME_RE.match(username or ''):
+        return 'Username must be 3-32 characters: letters, numbers, dot, underscore, or hyphen'
+    return None
+
+
+def _validate_password(password: str) -> str | None:
+    if not isinstance(password, str) or len(password) < USER_PASSWORD_MIN_LENGTH:
+        return f'Password must be at least {USER_PASSWORD_MIN_LENGTH} characters'
+    if len(password) > 128:
+        return 'Password must be at most 128 characters'
+    if not re.search(r'[a-z]', password):
+        return 'Password must include a lowercase letter'
+    if not re.search(r'[A-Z]', password):
+        return 'Password must include an uppercase letter'
+    if not re.search(r'[0-9]', password):
+        return 'Password must include a number'
+    return None
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
+    """Verify against bcrypt hash; accepts SHA256 for pre-migration accounts."""
+    if not password or not stored_hash:
+        return False
+    try:
+        if stored_hash.startswith('$2'):
+            return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
+        # Legacy SHA256 path — accept so existing users can still login
+        return hmac.compare_digest(
+            hashlib.sha256(password.encode()).hexdigest(), stored_hash
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+# ---------------------------------------------------------------------------
+# JWT helpers — HS256 with jti + iss + role claims
+# ---------------------------------------------------------------------------
+def _issue_jwt(sub: str, role: str, extra: dict | None = None) -> str:
+    now = int(time.time())
+    payload: dict = {
+        'sub': sub,
+        'role': role,
+        'jti': uuid.uuid4().hex,
+        'iat': now,
+        'exp': now + JWT_TTL,
+        'iss': JWT_ISSUER,
+    }
+    if extra:
+        payload.update(extra)
+    return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+
+
+def _decode_jwt(token: str) -> dict | None:
+    """Verify signature, expiry, issuer, and revocation list. Returns claims or None."""
+    if not token or not isinstance(token, str):
+        return None
+    try:
+        claims = jwt.decode(token, JWT_SECRET, algorithms=['HS256'], issuer=JWT_ISSUER)
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+    if _is_token_revoked(claims.get('jti', '')):
+        return None
+    return claims
+
+
+def _extract_token() -> str:
+    """Pull JWT from X-Admin-Token (priority) or Authorization: Bearer header."""
+    admin_token = request.headers.get('X-Admin-Token', '').strip()
+    if admin_token:
+        return admin_token
+    auth = request.headers.get('Authorization', '') or ''
+    if auth.startswith('Bearer '):
+        return auth[len('Bearer '):].strip()
+    return ''
+
+
+# ---------------------------------------------------------------------------
+# IP helper — ProxyFix already resolved remote_addr when TRUST_PROXY=true
+# ---------------------------------------------------------------------------
+def get_client_ip() -> str:
+    return request.remote_addr or '0.0.0.0'
+
+
+# ---------------------------------------------------------------------------
+# Request / response logging
+# ---------------------------------------------------------------------------
+@app.before_request
+def start_request_log():
+    g.request_id = uuid.uuid4().hex[:8]
+    g.start_time = time.time()
+    logger.info('[%s] %s %s ip=%s', g.request_id, request.method, request.path, get_client_ip())
+
+
 @app.after_request
 def add_security_headers(response):
-    """Add security headers to all responses."""
+    """Attach security headers and emit the response log line."""
+    duration_ms = int((time.time() - g.get('start_time', time.time())) * 1000)
+    logger.info('[%s] %s %dms', g.get('request_id', '-'), response.status_code, duration_ms)
+
+    response.headers['X-Request-ID'] = g.get('request_id', '-')
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    response.headers['Permissions-Policy'] = (
+        'geolocation=(), microphone=(), camera=(), payment=(), usb=()'
+    )
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "base-uri 'self'; "
+        "object-src 'none';"
+    )
     if request.path.startswith('/api/'):
-        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
     return response
+
 
 def sanitize_input(text):
     """Sanitize user input to prevent injection attacks."""
@@ -52,19 +338,40 @@ def sanitize_input(text):
     sanitized = re.sub(r'[^\w\s\-\.,!?\(\)]', '', text)
     return sanitized[:200]
 
+
 def require_admin(f):
-    """Decorator to require admin authentication."""
+    """Decorator: require a valid admin-role JWT."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.headers.get('X-Admin-Token', '')
-        if not auth or auth != _get_admin_token():
+        token = _extract_token()
+        if not token:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+        payload = _decode_jwt(token)
+        if not payload or payload.get('role') != 'admin':
+            return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+        g.jwt_claims = payload
         return f(*args, **kwargs)
     return decorated
 
-def _get_admin_token():
-    """Generate admin token from password (simple hash for session use)."""
-    return hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest()
+
+def require_user(f):
+    """Decorator: require a valid user-role (or admin) JWT."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = _extract_token()
+        if not token:
+            return jsonify({'success': False, 'error': 'Authentication required'}), 401
+        payload = _decode_jwt(token)
+        if not payload or payload.get('role') not in ('user', 'admin'):
+            return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+        g.jwt_claims = payload
+        try:
+            g.jwt_user_id = int(payload['sub'])
+        except (KeyError, ValueError, TypeError):
+            return jsonify({'success': False, 'error': 'Invalid token claims'}), 401
+        g.jwt_username = payload.get('username', '')
+        return f(*args, **kwargs)
+    return decorated
 
 # =============================================================================
 # Database Connection
@@ -160,6 +467,10 @@ def ensure_tables():
         CREATE INDEX IF NOT EXISTS idx_user_results_session ON user_results(session_id);
         CREATE INDEX IF NOT EXISTS idx_user_answers_lookup ON user_answers(user_id, session_id, question_id);
         CREATE INDEX IF NOT EXISTS idx_user_results_lookup ON user_results(user_id, session_id);
+        CREATE TABLE IF NOT EXISTS revoked_tokens (
+            jti        TEXT PRIMARY KEY,
+            expires_at INTEGER NOT NULL
+        );
     ''')
     db.commit()
     # Migrate existing databases: add profile columns if missing
@@ -208,16 +519,24 @@ def health_check():
 
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
-    """Verify admin password and return session token."""
+    """Verify admin password and return a signed JWT."""
     data = request.get_json()
     if not data or 'password' not in data:
         return jsonify({'success': False, 'error': 'Password required'}), 400
-    
+
+    ip = get_client_ip()
+    if not _login_rate_ok(ip):
+        logger.warning('[%s] admin login rate-limited ip=%s', g.get('request_id', '-'), ip)
+        return jsonify({'success': False, 'error': 'Too many attempts. Please wait.'}), 429
+
     if data['password'] == ADMIN_PASSWORD:
-        return jsonify({
-            'success': True,
-            'token': _get_admin_token()
-        })
+        _reset_login_failures(ip)
+        token = _issue_jwt('admin', 'admin')
+        logger.info('[%s] admin login success ip=%s', g.get('request_id', '-'), ip)
+        return jsonify({'success': True, 'token': token})
+
+    _record_login_failure(ip)
+    logger.warning('[%s] admin login failed ip=%s', g.get('request_id', '-'), ip)
     return jsonify({'success': False, 'error': 'Invalid password'}), 401
 
 @app.route('/api/admin/config', methods=['GET'])
@@ -462,35 +781,44 @@ def get_stats():
 def register_user():
     """Register a new user."""
     try:
+        ip = get_client_ip()
+        _record_register_attempt(ip)
+        if not _register_rate_ok(ip):
+            return jsonify({'success': False, 'error': 'Too many registrations. Please try again later.'}), 429
+
         data = request.get_json()
         if not data or 'username' not in data:
             return jsonify({'success': False, 'error': 'Username required'}), 400
-        
-        username = data['username'].strip()
-        if not username or len(username) < 2 or len(username) > 30:
-            return jsonify({'success': False, 'error': 'Username must be 2-30 characters'}), 400
-        
-        if not re.match(r'^[\w\s\-]+$', username):
-            return jsonify({'success': False, 'error': 'Username contains invalid characters'}), 400
-        
+
+        username = (data.get('username') or '').strip()
+        err = _validate_username(username)
+        if err:
+            return jsonify({'success': False, 'error': err}), 400
+
         db = get_db()
         ensure_tables()
-        
+
         password_hash = None
         if REQUIRE_USER_PASSWORD:
             password = data.get('password', '')
-            if not password or len(password) < 4:
-                return jsonify({'success': False, 'error': 'Password must be at least 4 characters'}), 400
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-        
+            err = _validate_password(password)
+            if err:
+                return jsonify({'success': False, 'error': err}), 400
+            password_hash = _hash_password(password)
+
         try:
             db.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)',
                       (username, password_hash))
             db.commit()
-            user = db.execute('SELECT id, username, display_name, email, bio FROM users WHERE username = ?', (username,)).fetchone()
-            
+            user = db.execute(
+                'SELECT id, username, display_name, email, bio FROM users WHERE username = ?',
+                (username,)
+            ).fetchone()
+            token = _issue_jwt(str(user['id']), 'user', {'username': user['username']})
+            logger.info('[%s] user registered username=%s ip=%s', g.get('request_id', '-'), username, ip)
             return jsonify({
                 'success': True,
+                'token': token,
                 'user': {
                     'id': user['id'],
                     'username': user['username'],
@@ -508,26 +836,45 @@ def register_user():
 def login_user():
     """Login existing user."""
     try:
+        ip = get_client_ip()
+        if not _login_rate_ok(ip):
+            return jsonify({'success': False, 'error': 'Too many attempts. Please wait.'}), 429
+
         data = request.get_json()
         if not data or 'username' not in data:
             return jsonify({'success': False, 'error': 'Username required'}), 400
-        
-        username = data['username'].strip()
+
+        username = (data.get('username') or '').strip()
         db = get_db()
         ensure_tables()
-        
+
         user = db.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-        if not user:
-            return jsonify({'success': False, 'error': 'User not found'})
-        
+
         if REQUIRE_USER_PASSWORD:
             password = data.get('password', '')
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-            if user['password_hash'] != password_hash:
-                return jsonify({'success': False, 'error': 'Invalid password'})
-        
+            # Timing guard: always run a verify even if user doesn't exist
+            if user is None:
+                _hash_password('timing~guard~placeholder')
+                _record_login_failure(ip)
+                return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+            if not _verify_password(password, user['password_hash'] or ''):
+                _record_login_failure(ip)
+                logger.warning('[%s] user login failed username=%s ip=%s', g.get('request_id', '-'), username, ip)
+                return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+            # Re-hash legacy SHA256 passwords with bcrypt on successful login
+            if user['password_hash'] and not user['password_hash'].startswith('$2'):
+                new_hash = _hash_password(password)
+                db.execute('UPDATE users SET password_hash = ? WHERE id = ?', (new_hash, user['id']))
+                db.commit()
+        elif user is None:
+            return jsonify({'success': False, 'error': 'User not found'})
+
+        _reset_login_failures(ip)
+        token = _issue_jwt(str(user['id']), 'user', {'username': user['username']})
+        logger.info('[%s] user login success username=%s ip=%s', g.get('request_id', '-'), username, ip)
         return jsonify({
             'success': True,
+            'token': token,
             'user': {
                 'id': user['id'],
                 'username': user['username'],
@@ -880,6 +1227,7 @@ def get_user_progress(user_id):
 # =============================================================================
 
 @app.route('/api/answer', methods=['POST'])
+@require_user
 def submit_answer():
     """Submit a single answer. Called after each question."""
     try:
@@ -887,6 +1235,10 @@ def submit_answer():
         required = ['userId', 'sessionId', 'questionId', 'selectedAnswers']
         if not data or not all(k in data for k in required):
             return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+
+        # Enforce that the JWT user matches the submitted userId
+        if int(data['userId']) != g.jwt_user_id:
+            return jsonify({'success': False, 'error': 'Forbidden'}), 403
         
         db = get_db()
         ensure_tables()
@@ -953,6 +1305,7 @@ def _validate_answer(question, selected_answers):
     return correct_set == selected_set
 
 @app.route('/api/quiz/complete', methods=['POST'])
+@require_user
 def complete_quiz():
     """Mark a quiz as completed for a user."""
     try:
@@ -960,6 +1313,9 @@ def complete_quiz():
         required = ['userId', 'sessionId']
         if not data or not all(k in data for k in required):
             return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+
+        if int(data['userId']) != g.jwt_user_id:
+            return jsonify({'success': False, 'error': 'Forbidden'}), 403
         
         db = get_db()
         ensure_tables()
@@ -1376,6 +1732,55 @@ def list_users():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+@app.route('/api/admin/users', methods=['POST'])
+@require_admin
+def create_user():
+    """Admin: create a new user account directly."""
+    try:
+        data = request.get_json()
+        if not data or 'username' not in data:
+            return jsonify({'success': False, 'error': 'Username required'}), 400
+
+        username = (data.get('username') or '').strip()
+        err = _validate_username(username)
+        if err:
+            return jsonify({'success': False, 'error': err}), 400
+
+        db = get_db()
+        ensure_tables()
+
+        password_hash = None
+        if data.get('password'):
+            err = _validate_password(data['password'])
+            if err:
+                return jsonify({'success': False, 'error': err}), 400
+            password_hash = _hash_password(data['password'])
+        elif REQUIRE_USER_PASSWORD:
+            return jsonify({'success': False, 'error': 'Password required (REQUIRE_USER_PASSWORD is enabled)'}), 400
+
+        display_name = (data.get('displayName') or '').strip()[:50] or None
+        email = (data.get('email') or '').strip()[:100] or None
+        bio = (data.get('bio') or '').strip()[:200] or None
+        role = (data.get('role') or '').strip()[:50] or None
+        organization = (data.get('organization') or '').strip()[:100] or None
+        phone = (data.get('phone') or '').strip()[:30] or None
+
+        try:
+            db.execute(
+                'INSERT INTO users (username, password_hash, display_name, email, bio, role, organization, phone)'
+                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (username, password_hash, display_name, email, bio, role, organization, phone)
+            )
+            db.commit()
+            user = db.execute('SELECT id, username FROM users WHERE username = ?', (username,)).fetchone()
+            logger.info('[%s] admin created user username=%s', g.get('request_id', '-'), username)
+            return jsonify({'success': True, 'userId': user['id'], 'username': user['username']})
+        except sqlite3.IntegrityError:
+            return jsonify({'success': False, 'error': 'Username already taken'}), 409
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
 @require_admin
 def delete_user(user_id):
@@ -1440,10 +1845,11 @@ def update_user(user_id):
             updates.append('phone = ?')
             params.append(data['phone'].strip()[:30] or None)
         if 'password' in data and data['password']:
-            if len(data['password']) < 4:
-                return jsonify({'success': False, 'error': 'Password must be at least 4 characters'}), 400
+            err = _validate_password(data['password'])
+            if err:
+                return jsonify({'success': False, 'error': err}), 400
             updates.append('password_hash = ?')
-            params.append(hashlib.sha256(data['password'].encode()).hexdigest())
+            params.append(_hash_password(data['password']))
         
         if not updates:
             return jsonify({'success': False, 'error': 'No fields to update'}), 400
@@ -1457,6 +1863,122 @@ def update_user(user_id):
         return jsonify({'success': False, 'error': 'Username already taken'}), 409
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# =============================================================================
+# File Upload Security
+# =============================================================================
+
+ALLOWED_UPLOAD_MIMES = {
+    'application/json',
+    'application/jsonlines',
+    'text/plain',
+    'text/csv',
+    'application/octet-stream',  # fallback for .jsonl files
+}
+
+
+@app.route('/api/admin/upload', methods=['POST'])
+@require_admin
+def upload_file():
+    """Upload a question bank file (JSONL/JSON/CSV). Admin only."""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': 'No file provided'}), 400
+
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'success': False, 'error': 'Empty filename'}), 400
+
+    filename = secure_filename(f.filename)
+    if not filename:
+        return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        return jsonify({
+            'success': False,
+            'error': f'File type not allowed. Permitted: {", ".join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}'
+        }), 400
+
+    # MIME validation
+    detected_mime = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+    if detected_mime not in ALLOWED_UPLOAD_MIMES:
+        return jsonify({'success': False, 'error': 'MIME type not permitted'}), 400
+
+    # Size check (belt-and-suspenders; MAX_CONTENT_LENGTH handles the hard limit)
+    f.seek(0, 2)
+    size = f.tell()
+    if size > MAX_UPLOAD_MB * 1024 * 1024:
+        return jsonify({'success': False, 'error': f'File exceeds {MAX_UPLOAD_MB} MB limit'}), 413
+    f.seek(0)
+
+    content = f.read()
+
+    # Validate structure for JSONL
+    if ext == '.jsonl':
+        errors = []
+        for i, line in enumerate(content.decode('utf-8', errors='replace').splitlines(), 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                json.loads(line)
+            except json.JSONDecodeError as e:
+                errors.append(f'Line {i}: {e}')
+            if len(errors) >= 5:
+                break
+        if errors:
+            return jsonify({'success': False, 'error': 'Invalid JSONL', 'details': errors}), 422
+
+    logger.info('[%s] file upload accepted filename=%s size=%d ip=%s',
+                g.get('request_id', '-'), filename, size, get_client_ip())
+
+    return jsonify({
+        'success': True,
+        'filename': filename,
+        'size': size,
+        'message': 'File validated. Integrate with build_database.py to import questions.'
+    })
+
+
+# =============================================================================
+# WebSocket Events
+# =============================================================================
+
+@socketio.on('connect')
+def on_ws_connect(auth):
+    token = (auth or {}).get('token', '')
+    if token:
+        payload = _decode_jwt(token)
+        if payload:
+            logger.info('ws connect user=%s sid=%s', payload.get('username', '?'), request.sid)
+        else:
+            logger.info('ws connect invalid-token sid=%s ip=%s', request.sid, get_client_ip())
+    else:
+        logger.info('ws connect anonymous sid=%s ip=%s', request.sid, get_client_ip())
+
+
+@socketio.on('disconnect')
+def on_ws_disconnect():
+    logger.info('ws disconnect sid=%s', request.sid)
+
+
+# =============================================================================
+# Logout — revoke the JWT so it cannot be reused before expiry
+# =============================================================================
+
+@app.route('/api/logout', methods=['POST'])
+def logout_user():
+    """Revoke the caller's JWT. Works for both user and admin tokens."""
+    token = _extract_token()
+    if token:
+        payload = _decode_jwt(token)
+        if payload:
+            _revoke_token(payload['jti'], payload.get('exp', 0))
+            _cleanup_revoked_tokens()  # opportunistic cleanup
+            logger.info('[%s] token revoked sub=%s ip=%s',
+                        g.get('request_id', '-'), payload.get('sub'), get_client_ip())
+    return jsonify({'success': True})
+
 
 # =============================================================================
 # Error Handlers
@@ -1481,10 +2003,14 @@ def rate_limit_exceeded(e):
 if __name__ == '__main__':
     port = int(os.environ.get('API_PORT', 5000))
     debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-    
-    print(f"Starting Question API Server on port {port}")
+
+    print(f"Starting Trivia Quest API on port {port}")
     print(f"Database: {DATABASE_PATH}")
-    print(f"Freeplay Default: {FREEPLAY_DEFAULT}")
-    print(f"Require User Password: {REQUIRE_USER_PASSWORD}")
-    
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    print(f"CORS origins: {CORS_ALLOWED_ORIGINS}")
+    print(f"Trust proxy: {TRUST_PROXY}")
+    print(f"Freeplay default: {FREEPLAY_DEFAULT}")
+    print(f"Require user password: {REQUIRE_USER_PASSWORD}")
+    print(f"JWT TTL: {JWT_TTL}s")
+    print(f"Max upload: {MAX_UPLOAD_MB} MB")
+
+    socketio.run(app, host='0.0.0.0', port=port, debug=debug, use_reloader=debug)
