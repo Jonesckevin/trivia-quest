@@ -1,0 +1,54 @@
+# Git and version control
+.git
+.github
+.gitignore
+.gitattributes
+
+# Node/Python package managers
+node_modules
+npm-debug.log
+.venv
+*.egg-info
+__pycache__
+*.pyc
+
+# Environment files (keep local only)
+.env
+.env.local
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test and build artifacts
+.pytest_cache
+.coverage
+htmlcov
+dist
+build
+*.zip
+
+# Docker files (don't add to context)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation (can reduce context size)
+docs
+README.md
+readme.md
+LICENSE
+example.png
+
+# CI/CD
+.trivyignore
+.github/workflows
+
+# Development
+start-server.sh
+start-server.ps1
+.venv
