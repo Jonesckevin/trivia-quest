@@ -3610,7 +3610,9 @@ body.presentation-mode .jeopardy-board {
     background: var(--card);
     border-bottom: 1px solid var(--border);
     overflow-x: auto;
-    position: relative;
+    position: sticky;
+    top: 52px;
+    z-index: 50;
 }
 
 .admin-tab {
@@ -3946,9 +3948,11 @@ body.presentation-mode .jeopardy-board {
     padding: 0.5rem 0.85rem;
     border-radius: 8px;
     border: 1px solid var(--border);
-    background: var(--input);
+    background: var(--card);
     color: var(--foreground);
     font-size: 0.875rem;
+    -webkit-appearance: none;
+    appearance: none;
 }
 
 /* --- Admin Card (generic bordered section) --- */
@@ -4870,4 +4874,113 @@ body.presentation-mode .jeopardy-board {
     .form-row {
         flex-direction: column;
     }
+}
+/* ==================== AUTH MODAL (Cross-Canvas style) ==================== */
+.auth-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9500;
+    padding: 1rem;
+    backdrop-filter: blur(4px);
+}
+.auth-modal-overlay.hidden { display: none; }
+.auth-dialog {
+    background: var(--card, #111);
+    border: 1px solid var(--border, rgba(139,92,246,0.2));
+    border-radius: 18px;
+    padding: 2rem 2rem 1.5rem;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+}
+.auth-dialog-header { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
+.auth-logo { width: 36px; height: 36px; flex-shrink: 0; border-radius: 8px; }
+.auth-dialog-header h2 { font-size: 1.1rem; font-weight: 700; color: var(--foreground, #e2e8f0); margin: 0; }
+.auth-intro { font-size: .875rem; color: var(--muted-foreground, #64748b); margin-bottom: 1.25rem; }
+.auth-error {
+    background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+    color: #f87171; font-size: .875rem; padding: .6rem .9rem; border-radius: 8px; margin-bottom: 1rem;
+}
+.auth-tabs { display: flex; gap: 4px; background: var(--secondary, rgba(26,26,46,.8)); border-radius: 10px; padding: 4px; margin-bottom: 1.25rem; }
+.auth-tab { flex: 1; padding: .55rem .75rem; border: none; background: transparent; color: var(--muted-foreground, #64748b); cursor: pointer; font-weight: 600; font-size: .9rem; border-radius: 7px; transition: all .2s; }
+.auth-tab.active { background: var(--primary, #8b5cf6); color: var(--primary-foreground, #fff); box-shadow: 0 2px 8px rgba(139,92,246,.3); }
+.auth-form { display: flex; flex-direction: column; gap: .85rem; margin-bottom: .5rem; }
+.auth-field { display: flex; flex-direction: column; gap: .35rem; }
+.auth-label { font-size: .82rem; font-weight: 600; color: var(--foreground, #e2e8f0); }
+.auth-input {
+    padding: .65rem .9rem; border-radius: 10px;
+    border: 1px solid var(--input, rgba(139,92,246,.2));
+    background: var(--secondary, rgba(26,26,46,.8));
+    color: var(--foreground, #e2e8f0); font-size: .9rem;
+    transition: border-color .2s, box-shadow .2s; outline: none; width: 100%;
+}
+.auth-input:focus { border-color: var(--primary, #8b5cf6); box-shadow: 0 0 0 3px rgba(139,92,246,.15); }
+.auth-remember { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted-foreground, #64748b); cursor: pointer; }
+.auth-submit {
+    margin-top: .25rem; padding: .75rem;
+    background: var(--primary, #8b5cf6); color: var(--primary-foreground, #fff);
+    border: none; border-radius: 12px; font-size: .95rem; font-weight: 700;
+    cursor: pointer; transition: opacity .2s, transform .1s; width: 100%;
+}
+.auth-submit:hover { opacity: .9; } .auth-submit:active { transform: scale(.98); }
+.auth-passkey-section { margin-top: .5rem; display: flex; flex-direction: column; gap: .5rem; }
+.auth-divider { text-align: center; font-size: .8rem; color: var(--muted-foreground, #64748b); position: relative; padding: .25rem 0; }
+.auth-divider::before, .auth-divider::after { content: ''; position: absolute; top: 50%; width: 38%; height: 1px; background: var(--border, rgba(139,92,246,.2)); }
+.auth-divider::before { left: 0; } .auth-divider::after { right: 0; }
+.auth-passkey-btn {
+    padding: .65rem; background: transparent; color: var(--foreground, #e2e8f0);
+    border: 1px solid var(--border, rgba(139,92,246,.2)); border-radius: 12px;
+    font-size: .9rem; font-weight: 600; cursor: pointer; transition: background .2s, border-color .2s; width: 100%;
+}
+.auth-passkey-btn:hover { background: var(--secondary); border-color: var(--primary, #8b5cf6); }
+.auth-passkey-btn:disabled { opacity: .5; cursor: not-allowed; }
+.auth-guest-section { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .85rem; }
+.auth-guest-note { font-size: .78rem; color: var(--muted-foreground); margin-bottom: .6rem; line-height: 1.4; }
+.auth-guest-btn {
+    padding: .65rem; background: transparent; color: var(--muted-foreground);
+    border: 1px solid var(--border); border-radius: 12px; font-size: .875rem;
+    cursor: pointer; transition: color .2s, border-color .2s; width: 100%;
+}
+.auth-guest-btn:hover { color: var(--foreground); border-color: var(--muted-foreground); }
+
+/* ==================== PROFILE AVATAR UPLOAD ==================== */
+.profile-avatar-wrap { position: relative; flex-shrink: 0; }
+.profile-avatar-edit {
+    position: absolute; bottom: -4px; right: -4px; width: 26px; height: 26px;
+    background: var(--primary, #8b5cf6); color: #fff; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-size: .8rem;
+    cursor: pointer; transition: opacity .2s; z-index: 2;
+}
+.profile-avatar-edit:hover { opacity: .85; }
+
+/* ==================== ADMIN LOGO ROW ==================== */
+.admin-logo-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: .75rem 0; margin-bottom: .5rem;
+    border-bottom: 1px solid var(--border); gap: 1rem; flex-wrap: wrap;
+}
+.admin-logo-info { flex: 1; }
+.admin-logo-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.admin-logo-thumb { width: 36px; height: 36px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); background: var(--card); }
+
+/* ==================== HOST CONTROLS LOGO ==================== */
+.logo-preview-wrap { display: flex; justify-content: center; padding: .5rem; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color); }
+.logo-preview-img { max-width: 100%; max-height: 80px; object-fit: contain; }
+
+/* ==================== CYBER THEME ==================== */
+body.theme-cyber-green::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,204,68,.012) 2px, rgba(0,204,68,.012) 4px);
+    pointer-events: none; z-index: 99999;
+}
+
+/* ==================== MAIN CONTENT - auth modal adjustments ==================== */
+.main-content:has(> .auth-modal-overlay:not(.hidden)) {
+    padding-top: 0;
+    padding-bottom: 0;
 }

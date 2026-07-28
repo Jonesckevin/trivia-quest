@@ -151,6 +151,31 @@ const themes = {
             ring: 'oklch(0.52 0.20 195)',
         },
     },
+    'cyber-green': {
+        name: 'cyber-green',
+        displayName: 'Cyber',
+        colors: {
+            background: '#030603',
+            foreground: '#c8f0c8',
+            card: '#080f08',
+            cardForeground: '#c8f0c8',
+            popover: '#070e07',
+            popoverForeground: '#c8f0c8',
+            primary: '#00cc44',
+            primaryForeground: '#000000',
+            secondary: '#0d1a0d',
+            secondaryForeground: '#88bb88',
+            muted: '#0a140a',
+            mutedForeground: '#557755',
+            accent: '#00ff55',
+            accentForeground: '#000000',
+            destructive: '#cc2200',
+            destructiveForeground: '#ffffff',
+            border: '#003311',
+            input: '#0d1a0d',
+            ring: '#00cc44',
+        },
+    },
     'classic': {
         name: 'classic',
         displayName: 'Classic (Original)',
@@ -253,6 +278,10 @@ function applyTheme(themeName) {
     
     // Store in localStorage
     localStorage.setItem('trivia-quest-theme', themeName);
+
+    // Apply body class for special themes (e.g., cyber scanline effect)
+    document.body.className = document.body.className.replace(/\btheme-\S+/g, '').trim();
+    document.body.classList.add(`theme-${themeName}`);
     
     // Update selector if exists
     updateThemeSelector(themeName);

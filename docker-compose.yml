@@ -5,29 +5,30 @@ services:
     ports:
       - "3002:80"
     environment:
-      - APP_TITLE=Trivia Quest
+      - APP_TITLE=${APP_TITLE:-Trivia Quest}
       # JWT — persistent secret so tokens survive container restarts.
       # Change this value if you want to invalidate all existing sessions.
       # Generate a new one with: $(openssl rand -hex 32)
-      - JWT_SECRET=change-me-i-am-not-secret
-      - SECRET_KEY=change-me-i-am-not-secret
-      - JWT_TTL_SECONDS=86400
+      - JWT_SECRET=${JWT_SECRET:-change-me-i-am-not-secret}
+      - SECRET_KEY=${SECRET_KEY:-change-me-i-am-not-secret}
+      - JWT_TTL_SECONDS=${JWT_TTL_SECONDS:-86400}
       # CORS — set to your frontend origin in production (e.g. https://yourdomain.com)
-      - CORS_ALLOWED_ORIGINS=*
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
       # Rate limiting
-      - LOGIN_RATE_MAX=5
-      - LOGIN_RATE_WINDOW=900
-      - REG_RATE_MAX=3
-      - REG_RATE_WINDOW=3600
-      # Proxy / HTTPS trust (set true when behind a reverse proxy that sets X-Forwarded-For)
-      - TRUST_PROXY=false
-      # File upload
-      - MAX_UPLOAD_MB=25
+      - LOGIN_RATE_MAX=${LOGIN_RATE_MAX:-5}
+      - LOGIN_RATE_WINDOW=${LOGIN_RATE_WINDOW:-900}
+      - REG_RATE_MAX=${REG_RATE_MAX:-3}
+      - REG_RATE_WINDOW=${REG_RATE_WINDOW:-3600}
+      # Proxy
+      - TRUST_PROXY=${TRUST_PROXY:-false}                     # Set true when behind a reverse proxy that sets X-Forwarded-For
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-25}                    # File upload
       # Quiz settings
-      - ADMIN_PASSWORD=admin123
-      - FREEPLAY=false
-      - REQUIRE_USER_PASSWORD=true
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ACCOUNTS_ENABLED=${ACCOUNTS_ENABLED:-false}           # false = freeplay-only mode (no user accounts)
+      - REQUIRE_USER_PASSWORD=${REQUIRE_USER_PASSWORD:-true}  # true = users must set a password when registering (recommended)
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/", "&&", "wget", "-q", "--spider", "http://localhost/api/health"]
       interval: 30s
@@ -35,8 +36,9 @@ services:
       retries: 3
       start_period: 10s
     volumes:
-      - ./data:/data
-    # Optional: Mount custom question bank for updates without rebuild
+      - ./data:/data  # Contains the SQLite database and uploaded files (avatars, logos, etc.)
+
+    ## Optional Mount custom question bank for updates without rebuild
     # volumes:
     #   - ./question_bank:/question_bank:ro
 

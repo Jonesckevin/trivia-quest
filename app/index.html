@@ -23,7 +23,7 @@
             <span class="hamburger"></span>
         </button>
         <div class="app-nav-brand">
-            <img src="logo.svg" alt="Logo" class="app-nav-logo">
+            <img src="logo.svg" alt="Logo" class="app-nav-logo" id="navLogo">
             <span class="app-nav-title">${APP_TITLE}</span>
         </div>
         <div class="app-nav-links" id="appNavLinks">
@@ -217,6 +217,21 @@
                 <h3>🎨 Theme</h3>
                 <div class="section-content">
                     <div class="theme-selector" id="themeOptions"></div>
+                </div>
+            </section>
+
+            <!-- Logo (visible when accounts are disabled) -->
+            <section class="control-section collapsed hidden" data-section="logo" id="hostLogoSection">
+                <h3>🖼️ Logo</h3>
+                <div class="section-content">
+                    <div class="logo-preview-wrap">
+                        <img id="hostLogoPreview" src="logo.svg" alt="Current logo" class="logo-preview-img">
+                    </div>
+                    <label class="btn btn-secondary" style="width:100%;text-align:center;cursor:pointer;margin-top:.5rem">
+                        📁 Upload Logo
+                        <input type="file" id="hostLogoInput" accept="image/*" hidden>
+                    </label>
+                    <button class="btn btn-sm" id="hostLogoResetBtn" style="width:100%;margin-top:.35rem;background:var(--destructive);color:#fff">Reset to Default</button>
                 </div>
             </section>
 
@@ -553,51 +568,67 @@
 
         <!-- ==================== QUIZ MODE SCREENS ==================== -->
 
-        <!-- User Registration/Login Screen (Quiz Mode) -->
-        <section class="quiz-auth-screen hidden" id="quizAuthScreen">
-            <div class="quiz-auth-content">
-                <div class="quiz-auth-hero">
-                    <img src="logo.svg" alt="Trivia Quest Logo" class="welcome-logo">
-                    <h1 class="welcome-title">${APP_TITLE}</h1>
-                    <p class="welcome-subtitle" id="quizSessionName">Loading quiz...</p>
+        <!-- Auth Modal (login/register) — Cross-Canvas style -->
+        <div class="auth-modal-overlay hidden" id="quizAuthScreen" role="dialog" aria-modal="true" aria-label="Account">
+            <div class="auth-dialog">
+                <div class="auth-dialog-header">
+                    <img src="logo.svg" alt="Logo" class="auth-logo" id="authLogo">
+                    <h2>${APP_TITLE} — Account</h2>
                 </div>
-                <div class="setup-card quiz-auth-card">
-                    <div class="quiz-auth-tabs">
-                        <button class="quiz-auth-tab active" data-auth-tab="register" id="authRegisterTab">Register</button>
-                        <button class="quiz-auth-tab" data-auth-tab="login" id="authLoginTab">Sign In</button>
-                    </div>
-                    <form class="quiz-auth-form" id="registerForm" autocomplete="on">
-                        <div class="form-group">
-                            <label for="regUsername">Username</label>
-                            <input type="text" id="regUsername" name="username" placeholder="Enter your name..." maxlength="30" autocomplete="username">
-                        </div>
-                        <div class="form-group hidden" id="regPasswordGroup">
-                            <label for="regPassword">Password</label>
-                            <input type="password" id="regPassword" name="password" placeholder="Choose a password..." minlength="4" autocomplete="new-password">
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-lg" id="registerBtn" style="width:100%">
-                            <span class="btn-icon">✏️</span> Register & Start Quiz
-                        </button>
-                        <p class="quiz-auth-error hidden" id="registerError"></p>
-                    </form>
-                    <form class="quiz-auth-form hidden" id="loginForm" autocomplete="on">
-                        <div class="form-group">
-                            <label for="loginUsername">Username</label>
-                            <input type="text" id="loginUsername" name="username" placeholder="Enter your username..." maxlength="30" autocomplete="username">
-                        </div>
-                        <div class="form-group hidden" id="loginPasswordGroup">
-                            <label for="loginPassword">Password</label>
-                            <input type="password" id="loginPassword" name="password" placeholder="Enter your password..." autocomplete="current-password">
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-lg" id="loginBtn" style="width:100%">
-                            <span class="btn-icon">🔑</span> Sign In & Continue
-                        </button>
-                        <p class="quiz-auth-error hidden" id="loginError"></p>
-                    </form>
+                <p class="auth-intro" id="authIntroText">Sign in to participate in the quiz.</p>
+                <div id="authError" class="auth-error hidden"></div>
 
+                <div class="auth-tabs" id="authTabBar">
+                    <button class="auth-tab active" id="authRegisterTab" type="button">Register</button>
+                    <button class="auth-tab" id="authLoginTab" type="button">Sign In</button>
+                </div>
+
+                <!-- Register Form -->
+                <form class="auth-form" id="registerForm" autocomplete="on">
+                    <label class="auth-field">
+                        <span class="auth-label">Username</span>
+                        <input type="text" id="regUsername" name="username" placeholder="Choose a username…" maxlength="32" autocomplete="username" class="auth-input">
+                    </label>
+                    <label class="auth-field hidden" id="regPasswordGroup">
+                        <span class="auth-label">Password</span>
+                        <input type="password" id="regPassword" name="password" placeholder="Min 8 chars, upper+lower+digit…" autocomplete="new-password" class="auth-input">
+                    </label>
+                    <button type="submit" class="auth-submit" id="registerBtn">Register &amp; Start</button>
+                    <div class="auth-passkey-section hidden" id="regPasskeySection">
+                        <div class="auth-divider">or, skip the password</div>
+                        <p class="auth-guest-note">Enter your username above, then confirm with your device biometrics or PIN.</p>
+                        <button type="button" class="auth-passkey-btn" id="regPasskeyBtn">🔑 Register with Passkey</button>
+                    </div>
+                </form>
+
+                <!-- Login Form -->
+                <form class="auth-form hidden" id="loginForm" autocomplete="on">
+                    <label class="auth-field">
+                        <span class="auth-label">Username</span>
+                        <input type="text" id="loginUsername" name="username" placeholder="Your username…" maxlength="32" autocomplete="username" class="auth-input">
+                    </label>
+                    <label class="auth-field hidden" id="loginPasswordGroup">
+                        <span class="auth-label">Password</span>
+                        <input type="password" id="loginPassword" name="password" placeholder="Password…" autocomplete="current-password" class="auth-input">
+                    </label>
+                    <label class="auth-remember" id="loginRememberGroup">
+                        <input type="checkbox" id="loginRemember" checked>
+                        <span> Remember me</span>
+                    </label>
+                    <button type="submit" class="auth-submit" id="loginBtn">Sign In</button>
+                    <div class="auth-passkey-section hidden" id="loginPasskeySection">
+                        <div class="auth-divider">or</div>
+                        <button type="button" class="auth-passkey-btn" id="loginPasskeyBtn">🔑 Sign in with Passkey</button>
+                    </div>
+                </form>
+
+                <!-- Continue as Guest (freeplay) -->
+                <div class="auth-guest-section" id="authGuestSection">
+                    <p class="auth-guest-note">Just want to play? Use Freeplay — no account needed.</p>
+                    <button type="button" class="auth-guest-btn" id="authGuestBtn">Continue without Account</button>
                 </div>
             </div>
-        </section>
+        </div>
 
         <!-- Quiz Taking Screen -->
         <section class="quiz-play-screen hidden" id="quizPlayScreen">
@@ -651,7 +682,13 @@
             <div class="modal-content" style="max-width:460px">
                 <h2 style="margin-bottom:1rem">👤 My Profile</h2>
                 <div class="profile-header">
-                    <div class="profile-avatar" id="profileAvatar">?</div>
+                    <div class="profile-avatar-wrap">
+                        <div class="profile-avatar" id="profileAvatar">?</div>
+                        <label class="profile-avatar-edit" title="Upload photo">
+                            📷
+                            <input type="file" id="profileAvatarInput" accept="image/*" hidden>
+                        </label>
+                    </div>
                     <div class="profile-summary">
                         <span class="profile-username" id="profileUsername">username</span>
                         <span class="profile-joined" id="profileJoined">Joined: -</span>
@@ -703,6 +740,14 @@
             <div class="modal-content" style="max-width:460px">
                 <h2 style="margin-bottom:1rem">✏️ Edit User</h2>
                 <input type="hidden" id="editUserId">
+                <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+                    <div class="profile-avatar" id="editUserAvatarPreview" style="width:56px;height:56px;font-size:1.2rem">?</div>
+                    <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+                        📷 Change Photo
+                        <input type="file" id="editUserAvatarInput" accept="image/*" hidden>
+                    </label>
+                    <input type="hidden" id="editUserAvatarUserId">
+                </div>
                 <div class="form-group">
                     <label for="editUserUsername">Username</label>
                     <input type="text" id="editUserUsername" maxlength="30">
@@ -859,15 +904,31 @@
                 <!-- Sessions Tab -->
                 <div class="admin-tab-content active" id="adminSessionsTab">
                     <!-- Freeplay Toggle -->
-                    <div class="admin-freeplay-row">
+                    <div class="admin-freeplay-row" id="adminFreeplayRow">
                         <div class="freeplay-info">
                             <span class="freeplay-label">Freeplay Mode</span>
-                            <span class="freeplay-desc">Allow users to play without an active session</span>
+                            <span class="freeplay-desc">Allow users to play without an active quiz session</span>
                         </div>
                         <label class="toggle-switch" id="adminToggleFreeplay">
                             <input type="checkbox" id="freeplayToggleInput">
                             <span class="toggle-slider"></span>
                         </label>
+                    </div>
+
+                    <!-- Logo Upload (admin) -->
+                    <div class="admin-logo-row">
+                        <div class="admin-logo-info">
+                            <span class="freeplay-label">App Logo</span>
+                            <span class="freeplay-desc">Replaces the default logo.svg everywhere</span>
+                        </div>
+                        <div class="admin-logo-actions">
+                            <img id="adminLogoPreview" src="logo.svg" alt="Current logo" class="admin-logo-thumb">
+                            <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+                                📁 Upload
+                                <input type="file" id="adminLogoInput" accept="image/*" hidden>
+                            </label>
+                            <button class="btn btn-sm" id="adminLogoResetBtn" style="background:var(--destructive);color:#fff">Reset</button>
+                        </div>
                     </div>
 
                     <div class="admin-section-header">

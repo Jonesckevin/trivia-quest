@@ -6,7 +6,7 @@
 
     // ==================== QUIZ STATE ====================
     const quizState = {
-        config: null,           // { freeplay, requireUserPassword, appTitle }
+        config: null,           // { accountsEnabled, freeplay, requireUserPassword, appTitle, passkeySupport }
         user: null,             // { id, username }
         userToken: null,        // JWT for authenticated user API calls
         adminToken: null,
@@ -82,6 +82,7 @@
         setTimeout(() => { toast.remove(); }, 3000);
     }
 
+    // updateFreeplayButton — syncs the admin panel freeplay toggle checkbox
     function updateFreeplayButton(freeplay) {
         const cb = $('freeplayToggleInput');
         if (cb) cb.checked = !!freeplay;
@@ -94,6 +95,13 @@
             if (!data.success) return;
             quizState.config = data.config;
             quizState.apiAvailable = true;
+
+            // Show host logo control in sidebar only when accounts are disabled
+            const hostLogoSec = $('hostLogoSection');
+            if (hostLogoSec) {
+                if (!quizState.config.accountsEnabled) hostLogoSec.classList.remove('hidden');
+                else hostLogoSec.classList.add('hidden');
+            }
 
             // Restore admin token from sessionStorage
             const savedToken = sessionStorage.getItem('tq_admin_token');
@@ -124,6 +132,12 @@
     }
 
     function showQuizMode() {
+        // If accounts are disabled, skip auth entirely and go straight to freeplay
+        if (!quizState.config?.accountsEnabled) {
+            showFreeplayMode();
+            return;
+        }
+
         // If admin is logged in, show admin panel
         if (quizState.adminToken) {
             showAdminPanel();
@@ -142,17 +156,36 @@
 
     // ==================== AUTH SCREEN ====================
     function showAuthScreen() {
+        if (!quizState.config?.accountsEnabled) {
+            showFreeplayMode();
+            return;
+        }
         hideAllScreens();
         quizState.currentScreen = 'auth';
         show($('quizAuthScreen'));
-        loadActiveSessionInfo();
         // Show password fields if required
         if (quizState.config?.requireUserPassword) {
             show($('regPasswordGroup'));
             show($('loginPasswordGroup'));
+            show($('loginRememberGroup'));
         } else {
             hide($('regPasswordGroup'));
             hide($('loginPasswordGroup'));
+            hide($('loginRememberGroup'));
+        }
+        // Show passkey sections if supported
+        if (quizState.config?.passkeySupport && _webauthnOK()) {
+            show($('regPasskeySection'));
+            show($('loginPasskeySection'));
+        } else {
+            hide($('regPasskeySection'));
+            hide($('loginPasskeySection'));
+        }
+        // Show/hide guest section based on freeplay availability
+        if (quizState.config?.freeplay) {
+            show($('authGuestSection'));
+        } else {
+            hide($('authGuestSection'));
         }
         updateNav();
     }
@@ -181,73 +214,96 @@
             $('authLoginTab').classList.remove('active');
             show($('registerForm'));
             hide($('loginForm'));
+            hide($('authError'));
         });
         $('authLoginTab')?.addEventListener('click', () => {
             $('authLoginTab').classList.add('active');
             $('authRegisterTab').classList.remove('active');
             hide($('registerForm'));
             show($('loginForm'));
+            hide($('authError'));
         });
 
         // Register
-        $('registerBtn')?.addEventListener('click', async () => {
+        $('registerForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
             const username = $('regUsername').value.trim();
-            if (!username) return showError('registerError', 'Please enter a username');
-
+            if (!username) return showAuthError('Please enter a username');
             const body = { username };
             if (quizState.config?.requireUserPassword) {
                 body.password = $('regPassword').value;
             }
-
             try {
                 const data = await api('/register', { method: 'POST', body: JSON.stringify(body) });
                 if (data.success) {
-                    quizState.user = data.user;
-                    quizState.userToken = data.token || null;
-                    sessionStorage.setItem('tq_user', JSON.stringify(data.user));
-                    if (data.token) sessionStorage.setItem('tq_user_token', data.token);
-                    updateNav();
-                    loadAndStartQuiz();
+                    onAuthSuccess(data);
                 } else {
-                    showError('registerError', data.error);
+                    showAuthError(data.error);
                 }
             } catch (e) {
-                showError('registerError', 'Connection error');
+                showAuthError('Connection error');
             }
         });
+        $('registerBtn')?.addEventListener('click', () => $('registerForm')?.requestSubmit?.() || $('registerForm')?.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})));
 
         // Login
-        $('loginBtn')?.addEventListener('click', async () => {
+        $('loginForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
             const username = $('loginUsername').value.trim();
-            if (!username) return showError('loginError', 'Please enter your username');
-
+            if (!username) return showAuthError('Please enter your username');
             const body = { username };
             if (quizState.config?.requireUserPassword) {
                 body.password = $('loginPassword').value;
             }
-
             try {
                 const data = await api('/login', { method: 'POST', body: JSON.stringify(body) });
                 if (data.success) {
-                    quizState.user = data.user;
-                    quizState.userToken = data.token || null;
-                    sessionStorage.setItem('tq_user', JSON.stringify(data.user));
-                    if (data.token) sessionStorage.setItem('tq_user_token', data.token);
-                    updateNav();
-                    loadAndStartQuiz();
+                    onAuthSuccess(data);
                 } else {
-                    showError('loginError', data.error);
+                    showAuthError(data.error);
                 }
             } catch (e) {
-                showError('loginError', 'Connection error');
+                showAuthError('Connection error');
+            }
+        });
+        $('loginBtn')?.addEventListener('click', () => $('loginForm')?.requestSubmit?.() || $('loginForm')?.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})));
+
+        // Passkey register
+        $('regPasskeyBtn')?.addEventListener('click', async () => {
+            const username = $('regUsername').value.trim();
+            if (!username) return showAuthError('Enter a username first');
+            const btn = $('regPasskeyBtn');
+            btn.disabled = true; btn.textContent = 'Waiting for passkey…';
+            try {
+                const data = await _passkeyRegister(username);
+                onAuthSuccess(data);
+            } catch (err) {
+                btn.disabled = false; btn.textContent = '🔑 Register with Passkey';
+                if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') showAuthError(err.message || 'Passkey failed');
             }
         });
 
-        // Enter key on inputs
-        $('regUsername')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('registerBtn').click(); });
-        $('loginUsername')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('loginBtn').click(); });
-        $('regPassword')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('registerBtn').click(); });
-        $('loginPassword')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('loginBtn').click(); });
+        // Passkey login
+        $('loginPasskeyBtn')?.addEventListener('click', async () => {
+            const btn = $('loginPasskeyBtn');
+            btn.disabled = true; btn.textContent = 'Waiting for passkey…';
+            try {
+                const data = await _passkeyLogin();
+                onAuthSuccess(data);
+            } catch (err) {
+                btn.disabled = false; btn.textContent = '🔑 Sign in with Passkey';
+                if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') showAuthError(err.message || 'Passkey failed');
+            }
+        });
+
+        // Continue as Guest → freeplay
+        $('authGuestBtn')?.addEventListener('click', () => showFreeplayMode());
+
+        // Enter-key shortcuts
+        $('regUsername')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('registerForm')?.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); });
+        $('regPassword')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('registerForm')?.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); });
+        $('loginUsername')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('loginForm')?.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); });
+        $('loginPassword')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('loginForm')?.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true})); });
 
         // Admin login modal
         $('adminLoginCancel')?.addEventListener('click', () => hide($('adminLoginModal')));
@@ -256,7 +312,9 @@
 
         // Nav bar handlers
         $('navQuiz')?.addEventListener('click', () => {
-            if (quizState.user) {
+            if (!quizState.config?.accountsEnabled) {
+                showFreeplayMode();
+            } else if (quizState.user) {
                 loadAndStartQuiz();
             } else {
                 showAuthScreen();
@@ -292,14 +350,21 @@
             quizState.correctCount = 0;
             quizState.currentIndex = 0;
             hide($('userProfileModal'));
-            showAuthScreen();
+            // When accounts are disabled, go to freeplay; otherwise show the auth screen
+            if (!quizState.config?.accountsEnabled) {
+                showFreeplayMode();
+            } else {
+                showAuthScreen();
+            }
         }
 
         $('navSignOut')?.addEventListener('click', signOut);
         $('profileSignOutBtn')?.addEventListener('click', signOut);
 
         $('navSignIn')?.addEventListener('click', () => {
-            if (quizState.user) {
+            if (!quizState.config?.accountsEnabled) {
+                // accounts disabled — Sign In not available
+            } else if (quizState.user) {
                 openProfile();
             } else {
                 showAuthScreen();
@@ -310,6 +375,20 @@
     function showError(id, msg) {
         const el = $(id);
         if (el) { el.textContent = msg; show(el); setTimeout(() => hide(el), 4000); }
+    }
+
+    function showAuthError(msg) {
+        const el = $('authError');
+        if (el) { el.textContent = msg; show(el); setTimeout(() => hide(el), 5000); }
+    }
+
+    function onAuthSuccess(data) {
+        quizState.user = data.user;
+        quizState.userToken = data.token || null;
+        sessionStorage.setItem('tq_user', JSON.stringify(data.user));
+        if (data.token) sessionStorage.setItem('tq_user_token', data.token);
+        updateNav();
+        loadAndStartQuiz();
     }
 
     // ==================== ADMIN LOGIN ====================
@@ -717,7 +796,7 @@
             });
         });
 
-        // Toggle freeplay (checkbox)
+        // Toggle freeplay (checkbox) — admin runtime toggle
         $('freeplayToggleInput')?.addEventListener('change', async (e) => {
             const newVal = e.target.checked;
             const updateData = await api('/admin/config', {
@@ -729,7 +808,7 @@
                 showToast(`Freeplay is now ${newVal ? 'ON' : 'OFF'}`);
                 updateNav();
             } else {
-                e.target.checked = !newVal; // revert
+                e.target.checked = !newVal;
                 showToast('Failed to toggle freeplay', 'error');
             }
         });
@@ -840,7 +919,7 @@
             api('/admin/results/summary').catch(() => null)
         ]);
 
-        // Freeplay toggle
+        // Freeplay toggle sync
         if (configData?.success) updateFreeplayButton(configData.config.freeplay);
 
         // Tab badges
@@ -1461,7 +1540,7 @@
             const data = await api(`/user/profile?userId=${quizState.user.id}`);
             if (!data.success) return showToast(data.error || 'Could not load profile', 'error');
             const p = data.profile;
-            $('profileAvatar').innerHTML = generateIdenticon(p.username || 'user');
+            _loadAvatarIntoEl('profileAvatar', p.id, p.username || 'user');
             $('profileUsername').textContent = p.username;
             $('profileJoined').textContent = `Joined: ${p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '-'}`;
             $('profileQuizCount').textContent = p.quizCount ?? 0;
@@ -1520,6 +1599,8 @@
             if (!data.success) return showToast('Could not load user', 'error');
             const p = data.profile;
             $('editUserId').value = id;
+            if ($('editUserAvatarUserId')) $('editUserAvatarUserId').value = id;
+            _loadAvatarIntoEl('editUserAvatarPreview', id, p.username || '');
             $('editUserUsername').value = p.username || '';
             $('editUserDisplayName').value = p.displayName || '';
             $('editUserEmail').value = p.email || '';
@@ -1588,6 +1669,9 @@
         if (!quizState.apiAvailable) { hide(nav); return; }
         show(nav);
 
+        const accountsEnabled = quizState.config?.accountsEnabled;
+        const freeplay = quizState.config?.freeplay;
+
         // Active link
         document.querySelectorAll('.app-nav-link').forEach(l => l.classList.remove('active'));
         const screen = quizState.currentScreen;
@@ -1599,29 +1683,27 @@
             $('navAdmin')?.classList.add('active');
         }
 
-        // Quiz link: visible only if user is logged in
-        if (quizState.user) {
-            show($('navQuiz'));
-        } else {
-            hide($('navQuiz'));
-        }
+        // Quiz link: only when accounts enabled AND user logged in
+        if (accountsEnabled && quizState.user) show($('navQuiz'));
+        else hide($('navQuiz'));
 
-        // Freeplay link: visible if freeplay is enabled
-        if (quizState.config?.freeplay) {
-            show($('navFreeplay'));
-        } else {
-            hide($('navFreeplay'));
-        }
+        // Freeplay link: always visible when accounts disabled, or when freeplay toggle is on
+        if (!accountsEnabled || freeplay) show($('navFreeplay'));
+        else hide($('navFreeplay'));
 
-        // Admin link: always visible
-        show($('navAdmin'));
+        // Admin link: only when accounts are enabled
+        if (accountsEnabled) show($('navAdmin'));
+        else hide($('navAdmin'));
 
-        // User section: show profile+signout if logged in, else show sign-in button
-        if (quizState.user) {
+        // User/Sign-in section: only relevant when accounts are enabled
+        if (!accountsEnabled) {
+            hide($('navUser'));
+            hide($('navSignIn'));
+        } else if (quizState.user) {
             show($('navUser'));
             hide($('navSignIn'));
             $('navUserName').textContent = quizState.user.displayName || quizState.user.username;
-            $('navUserAvatar').innerHTML = generateIdenticon(quizState.user.username);
+            _refreshNavAvatar();
         } else {
             hide($('navUser'));
             show($('navSignIn'));
@@ -1630,7 +1712,7 @@
 
     // ==================== UTILITIES ====================
     function hideAllScreens() {
-        // Hide quiz-mode screens
+        // Hide quiz-mode screens (auth is now a modal overlay)
         hide($('quizAuthScreen'));
         hide($('quizPlayScreen'));
         hide($('quizCompleteScreen'));
@@ -1691,6 +1773,248 @@
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 5" shape-rendering="crispEdges"><rect width="5" height="5" fill="${bg}"/>${rects}</svg>`;
     }
 
+    // ==================== AVATAR HELPERS ====================
+    function _refreshNavAvatar() {
+        const el = $('navUserAvatar');
+        if (!el || !quizState.user) return;
+        const uid = quizState.user.id;
+        const img = document.createElement('img');
+        img.src = `/api/user/avatar/${uid}?t=${Date.now()}`;
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:50%';
+        img.onerror = () => { el.innerHTML = generateIdenticon(quizState.user.username); };
+        img.onload = () => { el.innerHTML = ''; el.appendChild(img); };
+        el.innerHTML = '';
+        el.appendChild(img);
+    }
+
+    function _loadAvatarIntoEl(elId, userId, username) {
+        const el = $(elId);
+        if (!el) return;
+        if (!userId) { el.innerHTML = username ? generateIdenticon(username) : '?'; return; }
+        const img = document.createElement('img');
+        img.src = `/api/user/avatar/${userId}?t=${Date.now()}`;
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:50%';
+        img.onerror = () => { el.innerHTML = username ? generateIdenticon(username) : '?'; };
+        img.onload = () => { el.innerHTML = ''; el.appendChild(img); };
+        el.innerHTML = '';
+        el.appendChild(img);
+    }
+
+    async function _uploadAvatar(userId, file, isAdmin) {
+        const form = new FormData();
+        form.append('avatar', file);
+        const url = isAdmin ? `/api/admin/users/${userId}/avatar` : '/api/user/avatar';
+        const headers = {};
+        if (quizState.adminToken) headers['X-Admin-Token'] = quizState.adminToken;
+        else if (quizState.userToken) headers['Authorization'] = `Bearer ${quizState.userToken}`;
+        const resp = await fetch(url, { method: 'POST', headers, body: form });
+        return resp.json();
+    }
+
+    // Avatar upload listener for own profile
+    function _initAvatarUploadListeners() {
+        $('profileAvatarInput')?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file || !quizState.user) return;
+            try {
+                const res = await _uploadAvatar(quizState.user.id, file, false);
+                if (res.success) {
+                    showToast('Photo updated');
+                    _loadAvatarIntoEl('profileAvatar', quizState.user.id, quizState.user.username);
+                    _refreshNavAvatar();
+                } else {
+                    showToast(res.error || 'Upload failed', 'error');
+                }
+            } catch { showToast('Upload failed', 'error'); }
+            e.target.value = '';
+        });
+
+        $('editUserAvatarInput')?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            const userId = $('editUserAvatarUserId')?.value;
+            if (!file || !userId) return;
+            try {
+                const res = await _uploadAvatar(parseInt(userId), file, true);
+                if (res.success) {
+                    showToast('Photo updated');
+                    const username = $('editUserUsername')?.value || '';
+                    _loadAvatarIntoEl('editUserAvatarPreview', parseInt(userId), username);
+                } else {
+                    showToast(res.error || 'Upload failed', 'error');
+                }
+            } catch { showToast('Upload failed', 'error'); }
+            e.target.value = '';
+        });
+    }
+
+    // ==================== LOGO MANAGEMENT ====================
+    function _initLogoListeners() {
+        // Admin panel logo upload
+        $('adminLogoInput')?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const form = new FormData();
+            form.append('logo', file);
+            try {
+                const resp = await fetch('/api/admin/logo', {
+                    method: 'POST',
+                    headers: { 'X-Admin-Token': quizState.adminToken || '' },
+                    body: form
+                });
+                const res = await resp.json();
+                if (res.success) { showToast('Logo updated'); _refreshAllLogos(); }
+                else showToast(res.error || 'Upload failed', 'error');
+            } catch { showToast('Upload failed', 'error'); }
+            e.target.value = '';
+        });
+
+        $('adminLogoResetBtn')?.addEventListener('click', async () => {
+            const resp = await fetch('/api/admin/logo', {
+                method: 'DELETE',
+                headers: { 'X-Admin-Token': quizState.adminToken || '' }
+            });
+            const res = await resp.json();
+            if (res.success) { showToast('Logo reset'); _refreshAllLogos(); }
+            else showToast(res.error || 'Failed', 'error');
+        });
+
+        // Host controls logo upload (freeplay mode)
+        $('hostLogoInput')?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const form = new FormData();
+            form.append('logo', file);
+            // Need admin token even in freeplay mode — open admin modal first if not logged in
+            if (!quizState.adminToken) {
+                showToast('Please log in as admin first', 'error');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/admin/logo', {
+                    method: 'POST',
+                    headers: { 'X-Admin-Token': quizState.adminToken },
+                    body: form
+                });
+                const res = await resp.json();
+                if (res.success) { showToast('Logo updated'); _refreshAllLogos(); }
+                else showToast(res.error || 'Upload failed', 'error');
+            } catch { showToast('Upload failed', 'error'); }
+            e.target.value = '';
+        });
+
+        $('hostLogoResetBtn')?.addEventListener('click', async () => {
+            if (!quizState.adminToken) return;
+            const resp = await fetch('/api/admin/logo', {
+                method: 'DELETE',
+                headers: { 'X-Admin-Token': quizState.adminToken }
+            });
+            const res = await resp.json();
+            if (res.success) { showToast('Logo reset'); _refreshAllLogos(); }
+        });
+    }
+
+    function _refreshAllLogos() {
+        const bust = `?t=${Date.now()}`;
+        const customSrc = `/api/logo${bust}`;
+        const fallback = 'logo.svg';
+        // Try to load custom logo; fall back to logo.svg on error
+        function tryLogo(el) {
+            if (!el) return;
+            const img = new Image();
+            img.onload = () => { el.src = customSrc; };
+            img.onerror = () => { el.src = fallback; };
+            img.src = customSrc;
+        }
+        tryLogo($('navLogo'));
+        tryLogo($('welcomeLogo'));
+        tryLogo($('authLogo'));
+        // Update preview thumbnails
+        [$('adminLogoPreview'), $('hostLogoPreview')].forEach(el => {
+            if (!el) return;
+            const img = new Image();
+            img.onload = () => { el.src = customSrc; };
+            img.onerror = () => { el.src = fallback; };
+            img.src = customSrc;
+        });
+    }
+
+    // ==================== WEBAUTHN / PASSKEY ====================
+    function _webauthnOK() {
+        return !!(window.PublicKeyCredential && navigator.credentials);
+    }
+
+    function _bufToB64u(buf) {
+        return btoa(String.fromCharCode(...new Uint8Array(buf)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    function _b64uToBuf(s) {
+        return Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')),
+            c => c.charCodeAt(0)).buffer;
+    }
+
+    function _credToJSON(cred) {
+        const r = cred.response;
+        const out = {
+            id: cred.id, rawId: _bufToB64u(cred.rawId),
+            type: cred.type, authenticatorAttachment: cred.authenticatorAttachment || null,
+            clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+            response: { clientDataJSON: _bufToB64u(r.clientDataJSON) }
+        };
+        if (r.attestationObject) {
+            out.response.attestationObject = _bufToB64u(r.attestationObject);
+            out.response.transports = r.getTransports ? r.getTransports() : ['internal'];
+        }
+        if (r.authenticatorData) {
+            out.response.authenticatorData = _bufToB64u(r.authenticatorData);
+            out.response.signature = _bufToB64u(r.signature);
+            out.response.userHandle = r.userHandle ? _bufToB64u(r.userHandle) : null;
+        }
+        return out;
+    }
+
+    async function _passkeyRegister(username) {
+        const optsResp = await fetch('/auth/passkey/register/options', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username })
+        });
+        const optsData = await optsResp.json();
+        if (!optsResp.ok) throw new Error(optsData.error || 'Options request failed');
+        const cid = optsData.cid;
+        const opts = optsData.options;
+        opts.challenge = _b64uToBuf(opts.challenge);
+        if (opts.user?.id) opts.user.id = _b64uToBuf(opts.user.id);
+        (opts.excludeCredentials || []).forEach(c => { c.id = _b64uToBuf(c.id); });
+        const cred = await navigator.credentials.create({ publicKey: opts });
+        const verResp = await fetch('/auth/passkey/register/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cid, credential: _credToJSON(cred) })
+        });
+        const verData = await verResp.json();
+        if (!verResp.ok) throw new Error(verData.error || 'Verification failed');
+        return verData;
+    }
+
+    async function _passkeyLogin() {
+        const optsResp = await fetch('/auth/passkey/login/options', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+        });
+        const optsData = await optsResp.json();
+        if (!optsResp.ok) throw new Error(optsData.error || 'Options request failed');
+        const cid = optsData.cid;
+        const opts = optsData.options;
+        opts.challenge = _b64uToBuf(opts.challenge);
+        (opts.allowCredentials || []).forEach(c => { c.id = _b64uToBuf(c.id); });
+        const cred = await navigator.credentials.get({ publicKey: opts });
+        const verResp = await fetch('/auth/passkey/login/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cid, credential: _credToJSON(cred) })
+        });
+        const verData = await verResp.json();
+        if (!verResp.ok) throw new Error(verData.error || 'Authentication failed');
+        return verData;
+    }
+
     function escapeHtml(str) {
         if (!str) return '';
         const div = document.createElement('div');
@@ -1705,6 +2029,12 @@
         setTimeout(() => {
             initAuthListeners();
             initAdminListeners();
+            _initAvatarUploadListeners();
+            _initLogoListeners();
+            _refreshAllLogos();
+            // Show host logo section only when accounts are disabled
+            const accountsEnabled = document.cookie.includes('accounts') ||
+                sessionStorage.getItem('tq_accounts_enabled') !== 'false';
             initQuizMode();
         }, 100);
     });
