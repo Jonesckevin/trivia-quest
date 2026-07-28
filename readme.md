@@ -15,8 +15,18 @@ To add new question categories or banks to the database, you only need to create
 If you need a template, just add any question from the WebApp and export it to get the format.
 
 #### Docker Hub
-```sh
-docker run --rm -p 3002:80 -v $(pwd)/question_bank:/app/question_bank -v $(pwd)/data:/app/data trivia-quest:latest
+```powershell
+docker pull jonesckevin/trivia-quest:latest
+
+docker run --rm -p 3023:80 `
+  -e "APP_TITLE=test quest" `
+  -e "JWT_SECRET=change-me-this-should-be-32-chars-minimum-for-security!" `
+  -e "SECRET_KEY=change-me-this-should-be-32-chars-minimum-for-security!" `
+  -e "ADMIN_PASSWORD=admin123" `
+  -e "ACCOUNTS_ENABLED=false" `
+  -e "REQUIRE_USER_PASSWORD=false" `
+  -e "MAX_UPLOAD_MB=25" `
+  jonesckevin/trivia-quest:latest
 ```
 
 #### Docker Build
