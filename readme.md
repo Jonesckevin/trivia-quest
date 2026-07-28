@@ -19,7 +19,7 @@ If you need a template, just add any question from the WebApp and export it to g
 docker pull jonesckevin/trivia-quest:latest
 
 docker run --rm -p 3023:80 `
-  -e "APP_TITLE=test quest" `
+  -e "APP_TITLE=Trivia Quest" `
   -e "JWT_SECRET=change-me-this-should-be-32-chars-minimum-for-security!" `
   -e "SECRET_KEY=change-me-this-should-be-32-chars-minimum-for-security!" `
   -e "ADMIN_PASSWORD=admin123" `
