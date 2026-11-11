@@ -1,4 +1,3 @@
-// Service Worker for Trivia Quest - Offline PWA Support
 const CACHE_NAME = 'trivia-quest-v3';
 const ASSETS_TO_CACHE = [
   './',
@@ -10,12 +9,10 @@ const ASSETS_TO_CACHE = [
   './manifest.json'
 ];
 
-// External resources to cache (Google Fonts)
 const EXTERNAL_CACHE = [
   'https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap'
 ];
 
-// Install event - cache assets
 self.addEventListener('install', (event) => {
   console.log('[Service Worker] Installing...');
   
@@ -49,7 +46,6 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   console.log('[Service Worker] Activating...');
   
@@ -72,7 +68,6 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - cache-first for static assets, always network for API
 self.addEventListener('fetch', (event) => {
   // Skip non-GET requests (POST, PUT, DELETE etc. bypass SW entirely)
   if (event.request.method !== 'GET') {
@@ -184,7 +179,6 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Handle messages from the main app
 self.addEventListener('message', (event) => {
   if (event.data === 'skipWaiting') {
     self.skipWaiting();

@@ -1,6 +1,4 @@
-// ==================== ADMIN PREVIEW ==================== //
 
-// Open admin preview in new window
 function openAdminPreview() {
     const width = 1400;
     const height = 900;
@@ -14,7 +12,6 @@ function openAdminPreview() {
     );
 }
 
-// Initialize event listeners
 function initAdminPreview() {
     const adminPreviewBtn = document.getElementById('adminPreviewBtn');
     if (adminPreviewBtn) {
@@ -22,5 +19,4 @@ function initAdminPreview() {
     }
 }
 
-// Initialize when document is ready
 document.addEventListener('DOMContentLoaded', initAdminPreview);

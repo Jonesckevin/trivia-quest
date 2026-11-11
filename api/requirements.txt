@@ -1,7 +1,7 @@
 flask==3.1.1
 flask-cors==5.0.1
 flask-socketio==5.5.1
-PyJWT==2.9.0
-bcrypt==4.2.1
-gunicorn==21.2.0
-webauthn>=2.0.0,<3.0.0
+# PyJWT 2.9.0 -> CVE-2026-102268 (CRITICAL) plus CVE-2026-102267/-102271/-32597/-48526
+PyJWT>=2.14.0
+# gunicorn 21.2.0 -> CVE-2024-1135 / CVE-2024-6827 (request smuggling)
+gunicorn>=22.0.0

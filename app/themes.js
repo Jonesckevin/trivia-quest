@@ -1,4 +1,3 @@
-// ==================== THEME SYSTEM ====================
 
 const themes = {
     'dark-midnight-violet': {

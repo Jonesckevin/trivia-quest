@@ -10,9 +10,7 @@ import os
 import re
 import csv
 import io
-import base64
 import hashlib
-import hmac
 import uuid
 import time
 import threading
@@ -20,33 +18,12 @@ import logging
 import mimetypes
 from datetime import datetime
 from functools import wraps
+from typing import Optional
 import jwt
-import bcrypt
 from werkzeug.utils import secure_filename
-from werkzeug.middleware.proxy_fix import ProxyFix
 from flask import Flask, jsonify, request, g, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO
-
-try:
-    import webauthn as _webauthn
-    from webauthn.helpers.structs import (
-        AuthenticatorSelectionCriteria,
-        ResidentKeyRequirement,
-        UserVerificationRequirement,
-        RegistrationCredential,
-        AuthenticatorAttestationResponse,
-        AuthenticationCredential,
-        AuthenticatorAssertionResponse,
-        AuthenticatorTransport,
-    )
-    from webauthn.helpers import (
-        base64url_to_bytes as _b64url_to_bytes,
-        bytes_to_base64url as _bytes_to_b64url,
-    )
-    PASSKEY_SUPPORT = True
-except ImportError:
-    PASSKEY_SUPPORT = False
 
 app = Flask(__name__)
 
@@ -55,28 +32,26 @@ app = Flask(__name__)
 # =============================================================================
 DATABASE_PATH = os.environ.get('DATABASE_PATH', '/data/questions.db')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
-ACCOUNTS_ENABLED = os.environ.get('ACCOUNTS_ENABLED', 'true').lower() == 'true'
-FREEPLAY_DEFAULT = not ACCOUNTS_ENABLED  # When accounts disabled, freeplay is always on
+FREEPLAY_DEFAULT = os.environ.get('FREEPLAY', 'false').lower() == 'true'
 REQUIRE_USER_PASSWORD = os.environ.get('REQUIRE_USER_PASSWORD', 'false').lower() == 'true'
-USER_PASSWORD_MIN_LENGTH = int(os.environ.get('USER_PASSWORD_MIN_LENGTH', '8'))
 MAX_QUESTIONS_PER_REQUEST = 500
 
-# WebAuthn / Passkey config
-RP_ID = os.environ.get('RP_ID', 'localhost')
-RP_NAME = os.environ.get('APP_TITLE', 'Trivia Quest')
-_PK_ALLOW_LOCALHOST = True  # Allow passkeys from localhost by default
-_PASSKEY_ORIGIN_OVERRIDE = os.environ.get('PASSKEY_ORIGIN', '').strip()
-_pk_challenges: dict = {}
-_pk_lock = threading.Lock()
-
-# Avatar upload limits
-MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB
-ALLOWED_AVATAR_MIMES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
-
 # JWT
-JWT_SECRET = os.environ.get('JWT_SECRET') or os.urandom(32).hex()
+_jwt_secret_env = os.environ.get('JWT_SECRET', '').strip()
+_jwt_secret_file = os.path.join(os.path.dirname(DATABASE_PATH), '.jwt_secret')
+if _jwt_secret_env:
+    JWT_SECRET = _jwt_secret_env
+elif os.path.exists(_jwt_secret_file):
+    with open(_jwt_secret_file) as _f:
+        JWT_SECRET = _f.read().strip() or os.urandom(32).hex()
+else:
+    JWT_SECRET = os.urandom(32).hex()
+    try:
+        with open(_jwt_secret_file, 'w') as _f:
+            _f.write(JWT_SECRET)
+    except OSError:
+        pass  # persisting failed; env var JWT_SECRET is recommended for production
 JWT_TTL = int(os.environ.get('JWT_TTL_SECONDS', '86400'))
-JWT_ISSUER = 'trivia-quest'
 
 # Rate limiting
 LOGIN_RATE_MAX = int(os.environ.get('LOGIN_RATE_MAX', '5'))
@@ -96,13 +71,12 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+# Custom logo storage path (on the persistent data volume)
+LOGO_PATH = os.path.join(os.path.dirname(DATABASE_PATH), 'custom_logo')
+
 # Flask security config
 app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_MB * 1024 * 1024
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(32).hex()
-
-# Proxy trust — use Werkzeug's ProxyFix instead of manual header parsing
-if TRUST_PROXY:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 # Security: Configure CORS
 CORS(app, origins=CORS_ALLOWED_ORIGINS, methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -128,238 +102,56 @@ logger = logging.getLogger(__name__)
 # Security Middleware
 # =============================================================================
 
-# ---------------------------------------------------------------------------
-# Rate limiting — sliding-window, failures-only for login (per live-translate)
-# ---------------------------------------------------------------------------
-_login_failures: dict = {}     # ip -> [timestamps of recent failures]
-_register_attempts: dict = {}  # ip -> [timestamps of recent attempts]
-_rl_lock = threading.Lock()
+# --- Rate limiting (thread-safe in-memory) ---
+_rate_store: dict = {}
+_rate_lock = threading.Lock()
 
 
-def _login_rate_ok(ip: str) -> bool:
-    now = time.time()
-    with _rl_lock:
-        recent = [t for t in _login_failures.get(ip, []) if now - t < LOGIN_RATE_WINDOW]
-        _login_failures[ip] = recent
-        return len(recent) < LOGIN_RATE_MAX
+def check_rate_limit(identifier: str, max_count: int, window_seconds: int) -> bool:
+    """Return True if the request is within the allowed rate. Thread-safe."""
+    with _rate_lock:
+        bucket = int(time.time()) // window_seconds
+        key = f"{identifier}:{bucket}"
+        count = _rate_store.get(key, 0) + 1
+        _rate_store[key] = count
+        # Simple prune: clear oldest bucket when store grows large
+        if len(_rate_store) > 5000:
+            cutoff = f"{identifier}:{bucket - 2}"
+            stale = [k for k in list(_rate_store) if k <= cutoff]
+            for k in stale[:200]:
+                _rate_store.pop(k, None)
+        return count <= max_count
 
 
-def _record_login_failure(ip: str) -> None:
-    with _rl_lock:
-        _login_failures.setdefault(ip, []).append(time.time())
-
-
-def _reset_login_failures(ip: str) -> None:
-    with _rl_lock:
-        _login_failures.pop(ip, None)
-
-
-def _register_rate_ok(ip: str) -> bool:
-    now = time.time()
-    with _rl_lock:
-        recent = [t for t in _register_attempts.get(ip, []) if now - t < REG_RATE_WINDOW]
-        _register_attempts[ip] = recent
-        return len(recent) < REG_RATE_MAX
-
-
-def _record_register_attempt(ip: str) -> None:
-    with _rl_lock:
-        _register_attempts.setdefault(ip, []).append(time.time())
-
-
-# ---------------------------------------------------------------------------
-# Token revocation — direct DB access (no request context needed in decorators)
-# ---------------------------------------------------------------------------
-def _revocation_connect():
-    conn = sqlite3.connect(DATABASE_PATH, timeout=5)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL')
-    return conn
-
-
-def _ensure_revocation_table() -> None:
-    try:
-        with _revocation_connect() as conn:
-            conn.execute(
-                'CREATE TABLE IF NOT EXISTS revoked_tokens ('
-                '  jti TEXT PRIMARY KEY,'
-                '  expires_at INTEGER NOT NULL'
-                ')'
-            )
-            conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
-
-def _is_token_revoked(jti: str) -> bool:
-    if not jti:
-        return False
-    try:
-        with _revocation_connect() as conn:
-            return conn.execute(
-                'SELECT 1 FROM revoked_tokens WHERE jti = ?', (jti,)
-            ).fetchone() is not None
-    except sqlite3.OperationalError:
-        return False  # table not yet created — treat as not revoked
-
-
-def _revoke_token(jti: str, exp: int) -> None:
-    if not jti:
-        return
-    try:
-        with _revocation_connect() as conn:
-            conn.execute(
-                'INSERT OR REPLACE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)',
-                (jti, int(exp or 0))
-            )
-            conn.commit()
-    except Exception:
-        pass
-
-
-def _cleanup_revoked_tokens() -> None:
-    """Remove revocation entries whose JWTs have already expired."""
-    try:
-        with _revocation_connect() as conn:
-            conn.execute('DELETE FROM revoked_tokens WHERE expires_at < ?', (int(time.time()),))
-            conn.commit()
-    except Exception:
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Password helpers — bcrypt with SHA256 legacy fallback for migration
-# ---------------------------------------------------------------------------
-_USERNAME_RE = re.compile(r'^[A-Za-z0-9_.\-]{3,32}$')
-
-
-def _validate_username(username: str) -> str | None:
-    if not isinstance(username, str) or not _USERNAME_RE.match(username or ''):
-        return 'Username must be 3-32 characters: letters, numbers, dot, underscore, or hyphen'
-    return None
-
-
-def _validate_password(password: str) -> str | None:
-    if not isinstance(password, str) or len(password) < USER_PASSWORD_MIN_LENGTH:
-        return f'Password must be at least {USER_PASSWORD_MIN_LENGTH} characters'
-    if len(password) > 128:
-        return 'Password must be at most 128 characters'
-    if not re.search(r'[a-z]', password):
-        return 'Password must include a lowercase letter'
-    if not re.search(r'[A-Z]', password):
-        return 'Password must include an uppercase letter'
-    if not re.search(r'[0-9]', password):
-        return 'Password must include a number'
-    return None
-
-
-def _hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-
-def _verify_password(password: str, stored_hash: str) -> bool:
-    """Verify against bcrypt hash; accepts SHA256 for pre-migration accounts."""
-    if not password or not stored_hash:
-        return False
-    try:
-        if stored_hash.startswith('$2'):
-            return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
-        # Legacy SHA256 path — accept so existing users can still login
-        return hmac.compare_digest(
-            hashlib.sha256(password.encode()).hexdigest(), stored_hash
-        )
-    except (ValueError, TypeError):
-        return False
-
-
-# ---------------------------------------------------------------------------
-# JWT helpers — HS256 with jti + iss + role claims
-# ---------------------------------------------------------------------------
-def _issue_jwt(sub: str, role: str, extra: dict | None = None) -> str:
+# --- JWT helpers ---
+def _issue_jwt(payload: dict) -> str:
+    """Sign and return a JWT."""
     now = int(time.time())
-    payload: dict = {
-        'sub': sub,
-        'role': role,
-        'jti': uuid.uuid4().hex,
-        'iat': now,
-        'exp': now + JWT_TTL,
-        'iss': JWT_ISSUER,
-    }
-    if extra:
-        payload.update(extra)
+    payload.update({'iat': now, 'exp': now + JWT_TTL})
     return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
 
 
-def _decode_jwt(token: str) -> dict | None:
-    """Verify signature, expiry, issuer, and revocation list. Returns claims or None."""
-    if not token or not isinstance(token, str):
-        return None
+def _decode_jwt(token: str) -> Optional[dict]:
+    """Verify and decode a JWT. Returns None on any error."""
     try:
-        claims = jwt.decode(token, JWT_SECRET, algorithms=['HS256'], issuer=JWT_ISSUER)
+        return jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
         return None
-    if _is_token_revoked(claims.get('jti', '')):
-        return None
-    return claims
 
 
-def _extract_token() -> str:
-    """Pull JWT from X-Admin-Token (priority) or Authorization: Bearer header."""
-    admin_token = request.headers.get('X-Admin-Token', '').strip()
-    if admin_token:
-        return admin_token
-    auth = request.headers.get('Authorization', '') or ''
-    if auth.startswith('Bearer '):
-        return auth[len('Bearer '):].strip()
-    return ''
-
-
-# ---------------------------------------------------------------------------
-# Passkey / WebAuthn helpers
-# ---------------------------------------------------------------------------
-def _pk_put(data: dict) -> str:
-    cid = uuid.uuid4().hex
-    now = time.time()
-    with _pk_lock:
-        stale = [k for k, v in list(_pk_challenges.items()) if v.get('_exp', 0) < now]
-        for k in stale:
-            del _pk_challenges[k]
-        _pk_challenges[cid] = {**data, '_exp': now + 300}
-    return cid
-
-
-def _pk_take(cid: str):
-    with _pk_lock:
-        c = _pk_challenges.pop(cid, None)
-    if not c or c.get('_exp', 0) < time.time():
-        return None
-    return c
-
-
-def _passkey_origin() -> str:
-    if _PASSKEY_ORIGIN_OVERRIDE:
-        return _PASSKEY_ORIGIN_OVERRIDE
-    origin = (request.headers.get('Origin') or '').strip()
-    if origin:
-        return origin
-    host = request.headers.get('Host', 'localhost')
-    scheme = 'https' if request.is_secure else 'http'
-    return f'{scheme}://{host}'
-
-
-
-# ---------------------------------------------------------------------------
-# IP helper — ProxyFix already resolved remote_addr when TRUST_PROXY=true
-# ---------------------------------------------------------------------------
+# --- Proxy / IP helpers ---
 def get_client_ip() -> str:
+    """Return the real client IP, honouring X-Forwarded-For only when TRUST_PROXY=true."""
+    if TRUST_PROXY:
+        forwarded = request.headers.get('X-Forwarded-For', '')
+        if forwarded:
+            return forwarded.split(',')[0].strip()
     return request.remote_addr or '0.0.0.0'
 
 
-# ---------------------------------------------------------------------------
-# Request / response logging
-# ---------------------------------------------------------------------------
+# --- Request / response logging ---
 @app.before_request
 def start_request_log():
     g.request_id = uuid.uuid4().hex[:8]
@@ -394,8 +186,7 @@ def add_security_headers(response):
         "object-src 'none';"
     )
     if request.path.startswith('/api/'):
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
+        response.headers['Cache-Control'] = 'no-cache'
     return response
 
 
@@ -408,36 +199,36 @@ def sanitize_input(text):
 
 
 def require_admin(f):
-    """Decorator: require a valid admin-role JWT."""
+    """Decorator: require a valid admin JWT in X-Admin-Token (preferred) or Authorization header."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = _extract_token()
+        # X-Admin-Token takes priority; only fall back to Authorization: Bearer when absent
+        token = request.headers.get('X-Admin-Token', '')
+        if not token:
+            auth = request.headers.get('Authorization', '')
+            if auth.startswith('Bearer '):
+                token = auth[7:]
         if not token:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
         payload = _decode_jwt(token)
-        if not payload or payload.get('role') != 'admin':
+        if not payload or payload.get('sub') != 'admin':
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
-        g.jwt_claims = payload
         return f(*args, **kwargs)
     return decorated
 
 
 def require_user(f):
-    """Decorator: require a valid user-role (or admin) JWT."""
+    """Decorator: require a valid user JWT in Authorization header."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = _extract_token()
-        if not token:
+        auth = request.headers.get('Authorization', '')
+        if not auth.startswith('Bearer '):
             return jsonify({'success': False, 'error': 'Authentication required'}), 401
-        payload = _decode_jwt(token)
-        if not payload or payload.get('role') not in ('user', 'admin'):
+        payload = _decode_jwt(auth[7:])
+        if not payload or payload.get('sub') != 'user':
             return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
-        g.jwt_claims = payload
-        try:
-            g.jwt_user_id = int(payload['sub'])
-        except (KeyError, ValueError, TypeError):
-            return jsonify({'success': False, 'error': 'Invalid token claims'}), 401
-        g.jwt_username = payload.get('username', '')
+        g.jwt_user_id = payload['uid']
+        g.jwt_username = payload.get('usr', '')
         return f(*args, **kwargs)
     return decorated
 
@@ -535,24 +326,11 @@ def ensure_tables():
         CREATE INDEX IF NOT EXISTS idx_user_results_session ON user_results(session_id);
         CREATE INDEX IF NOT EXISTS idx_user_answers_lookup ON user_answers(user_id, session_id, question_id);
         CREATE INDEX IF NOT EXISTS idx_user_results_lookup ON user_results(user_id, session_id);
-        CREATE TABLE IF NOT EXISTS revoked_tokens (
-            jti        TEXT PRIMARY KEY,
-            expires_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS passkeys (
-            cred_id      TEXT PRIMARY KEY,
-            user_id      INTEGER NOT NULL,
-            public_key   TEXT NOT NULL,
-            sign_count   INTEGER NOT NULL DEFAULT 0,
-            transports   TEXT NOT NULL DEFAULT '[]',
-            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_used_at TIMESTAMP
-        );
     ''')
     db.commit()
     # Migrate existing databases: add profile columns if missing
     cols = {row['name'] for row in db.execute("PRAGMA table_info(users)").fetchall()}
-    for col, typedef in [('display_name', 'TEXT'), ('email', 'TEXT'), ('bio', 'TEXT'), ('role', 'TEXT'), ('organization', 'TEXT'), ('phone', 'TEXT'), ('avatar_data', 'BLOB'), ('avatar_type', 'TEXT')]:
+    for col, typedef in [('display_name', 'TEXT'), ('email', 'TEXT'), ('bio', 'TEXT'), ('role', 'TEXT'), ('organization', 'TEXT'), ('phone', 'TEXT')]:
         if col not in cols:
             db.execute(f'ALTER TABLE users ADD COLUMN {col} {typedef}')
     db.commit()
@@ -565,16 +343,16 @@ def get_config():
     try:
         db = get_db()
         ensure_tables()
+        
         row = db.execute("SELECT value FROM app_config WHERE key = 'freeplay'").fetchone()
         freeplay = row['value'] == 'true' if row else FREEPLAY_DEFAULT
+        
         return jsonify({
             'success': True,
             'config': {
-                'accountsEnabled': ACCOUNTS_ENABLED,
                 'freeplay': freeplay,
                 'requireUserPassword': REQUIRE_USER_PASSWORD,
-                'appTitle': os.environ.get('APP_TITLE', 'Trivia Quest'),
-                'passkeySupport': PASSKEY_SUPPORT,
+                'appTitle': os.environ.get('APP_TITLE', 'Trivia Quest')
             }
         })
     except Exception as e:
@@ -602,17 +380,15 @@ def admin_login():
         return jsonify({'success': False, 'error': 'Password required'}), 400
 
     ip = get_client_ip()
-    if not _login_rate_ok(ip):
+    if not check_rate_limit(f'admin_login:{ip}', LOGIN_RATE_MAX, LOGIN_RATE_WINDOW):
         logger.warning('[%s] admin login rate-limited ip=%s', g.get('request_id', '-'), ip)
         return jsonify({'success': False, 'error': 'Too many attempts. Please wait.'}), 429
 
     if data['password'] == ADMIN_PASSWORD:
-        _reset_login_failures(ip)
-        token = _issue_jwt('admin', 'admin')
+        token = _issue_jwt({'sub': 'admin'})
         logger.info('[%s] admin login success ip=%s', g.get('request_id', '-'), ip)
         return jsonify({'success': True, 'token': token})
 
-    _record_login_failure(ip)
     logger.warning('[%s] admin login failed ip=%s', g.get('request_id', '-'), ip)
     return jsonify({'success': False, 'error': 'Invalid password'}), 401
 
@@ -623,16 +399,17 @@ def get_admin_config():
     try:
         db = get_db()
         ensure_tables()
+        
         row = db.execute("SELECT value FROM app_config WHERE key = 'freeplay'").fetchone()
         freeplay = row['value'] == 'true' if row else FREEPLAY_DEFAULT
+        
         return jsonify({
             'success': True,
             'config': {
-                'accountsEnabled': ACCOUNTS_ENABLED,
                 'freeplay': freeplay,
+                'freeplayDefault': FREEPLAY_DEFAULT,
                 'requireUserPassword': REQUIRE_USER_PASSWORD,
-                'adminPassword': '***',
-                'passkeySupport': PASSKEY_SUPPORT,
+                'adminPassword': '***'
             }
         })
     except Exception as e:
@@ -641,13 +418,15 @@ def get_admin_config():
 @app.route('/api/admin/config', methods=['POST'])
 @require_admin
 def update_admin_config():
-    """Update runtime configuration (freeplay toggle)."""
+    """Update runtime configuration."""
     try:
         data = request.get_json()
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
         db = get_db()
         ensure_tables()
+        
         if 'freeplay' in data:
             val = 'true' if data['freeplay'] else 'false'
             db.execute('''
@@ -655,6 +434,7 @@ def update_admin_config():
                 ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP
             ''', (val, val))
             db.commit()
+        
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -852,44 +632,39 @@ def get_stats():
 
 @app.route('/api/register', methods=['POST'])
 def register_user():
-    """Register a new user. Disabled when ACCOUNTS_ENABLED=false."""
-    if not ACCOUNTS_ENABLED:
-        return jsonify({'success': False, 'error': 'User accounts are disabled on this instance'}), 404
+    """Register a new user."""
     try:
         ip = get_client_ip()
-        _record_register_attempt(ip)
-        if not _register_rate_ok(ip):
+        if not check_rate_limit(f'register:{ip}', REG_RATE_MAX, REG_RATE_WINDOW):
             return jsonify({'success': False, 'error': 'Too many registrations. Please try again later.'}), 429
 
         data = request.get_json()
         if not data or 'username' not in data:
             return jsonify({'success': False, 'error': 'Username required'}), 400
-
-        username = (data.get('username') or '').strip()
-        err = _validate_username(username)
-        if err:
-            return jsonify({'success': False, 'error': err}), 400
-
+        
+        username = data['username'].strip()
+        if not username or len(username) < 2 or len(username) > 30:
+            return jsonify({'success': False, 'error': 'Username must be 2-30 characters'}), 400
+        
+        if not re.match(r'^[\w\s\-]+$', username):
+            return jsonify({'success': False, 'error': 'Username contains invalid characters'}), 400
+        
         db = get_db()
         ensure_tables()
-
+        
         password_hash = None
         if REQUIRE_USER_PASSWORD:
             password = data.get('password', '')
-            err = _validate_password(password)
-            if err:
-                return jsonify({'success': False, 'error': err}), 400
-            password_hash = _hash_password(password)
-
+            if not password or len(password) < 4:
+                return jsonify({'success': False, 'error': 'Password must be at least 4 characters'}), 400
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
         try:
             db.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)',
                       (username, password_hash))
             db.commit()
-            user = db.execute(
-                'SELECT id, username, display_name, email, bio FROM users WHERE username = ?',
-                (username,)
-            ).fetchone()
-            token = _issue_jwt(str(user['id']), 'user', {'username': user['username']})
+            user = db.execute('SELECT id, username, display_name, email, bio FROM users WHERE username = ?', (username,)).fetchone()
+            token = _issue_jwt({'sub': 'user', 'uid': user['id'], 'usr': user['username']})
             logger.info('[%s] user registered username=%s ip=%s', g.get('request_id', '-'), username, ip)
             return jsonify({
                 'success': True,
@@ -909,45 +684,32 @@ def register_user():
 
 @app.route('/api/login', methods=['POST'])
 def login_user():
-    """Login existing user. Disabled when ACCOUNTS_ENABLED=false."""
-    if not ACCOUNTS_ENABLED:
-        return jsonify({'success': False, 'error': 'User accounts are disabled on this instance'}), 404
+    """Login existing user."""
     try:
         ip = get_client_ip()
-        if not _login_rate_ok(ip):
+        if not check_rate_limit(f'login:{ip}', LOGIN_RATE_MAX, LOGIN_RATE_WINDOW):
             return jsonify({'success': False, 'error': 'Too many attempts. Please wait.'}), 429
 
         data = request.get_json()
         if not data or 'username' not in data:
             return jsonify({'success': False, 'error': 'Username required'}), 400
-
-        username = (data.get('username') or '').strip()
+        
+        username = data['username'].strip()
         db = get_db()
         ensure_tables()
-
+        
         user = db.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-
+        if not user:
+            return jsonify({'success': False, 'error': 'User not found'})
+        
         if REQUIRE_USER_PASSWORD:
             password = data.get('password', '')
-            # Timing guard: always run a verify even if user doesn't exist
-            if user is None:
-                _hash_password('timing~guard~placeholder')
-                _record_login_failure(ip)
-                return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
-            if not _verify_password(password, user['password_hash'] or ''):
-                _record_login_failure(ip)
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            if user['password_hash'] != password_hash:
                 logger.warning('[%s] user login failed username=%s ip=%s', g.get('request_id', '-'), username, ip)
-                return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
-            # Re-hash legacy SHA256 passwords with bcrypt on successful login
-            if user['password_hash'] and not user['password_hash'].startswith('$2'):
-                new_hash = _hash_password(password)
-                db.execute('UPDATE users SET password_hash = ? WHERE id = ?', (new_hash, user['id']))
-                db.commit()
-        elif user is None:
-            return jsonify({'success': False, 'error': 'User not found'})
-
-        _reset_login_failures(ip)
-        token = _issue_jwt(str(user['id']), 'user', {'username': user['username']})
+                return jsonify({'success': False, 'error': 'Invalid password'})
+        
+        token = _issue_jwt({'sub': 'user', 'uid': user['id'], 'usr': user['username']})
         logger.info('[%s] user login success username=%s ip=%s', g.get('request_id', '-'), username, ip)
         return jsonify({
             'success': True,
@@ -1809,55 +1571,6 @@ def list_users():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
-
-@app.route('/api/admin/users', methods=['POST'])
-@require_admin
-def create_user():
-    """Admin: create a new user account directly."""
-    try:
-        data = request.get_json()
-        if not data or 'username' not in data:
-            return jsonify({'success': False, 'error': 'Username required'}), 400
-
-        username = (data.get('username') or '').strip()
-        err = _validate_username(username)
-        if err:
-            return jsonify({'success': False, 'error': err}), 400
-
-        db = get_db()
-        ensure_tables()
-
-        password_hash = None
-        if data.get('password'):
-            err = _validate_password(data['password'])
-            if err:
-                return jsonify({'success': False, 'error': err}), 400
-            password_hash = _hash_password(data['password'])
-        elif REQUIRE_USER_PASSWORD:
-            return jsonify({'success': False, 'error': 'Password required (REQUIRE_USER_PASSWORD is enabled)'}), 400
-
-        display_name = (data.get('displayName') or '').strip()[:50] or None
-        email = (data.get('email') or '').strip()[:100] or None
-        bio = (data.get('bio') or '').strip()[:200] or None
-        role = (data.get('role') or '').strip()[:50] or None
-        organization = (data.get('organization') or '').strip()[:100] or None
-        phone = (data.get('phone') or '').strip()[:30] or None
-
-        try:
-            db.execute(
-                'INSERT INTO users (username, password_hash, display_name, email, bio, role, organization, phone)'
-                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (username, password_hash, display_name, email, bio, role, organization, phone)
-            )
-            db.commit()
-            user = db.execute('SELECT id, username FROM users WHERE username = ?', (username,)).fetchone()
-            logger.info('[%s] admin created user username=%s', g.get('request_id', '-'), username)
-            return jsonify({'success': True, 'userId': user['id'], 'username': user['username']})
-        except sqlite3.IntegrityError:
-            return jsonify({'success': False, 'error': 'Username already taken'}), 409
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
 @require_admin
 def delete_user(user_id):
@@ -1922,11 +1635,10 @@ def update_user(user_id):
             updates.append('phone = ?')
             params.append(data['phone'].strip()[:30] or None)
         if 'password' in data and data['password']:
-            err = _validate_password(data['password'])
-            if err:
-                return jsonify({'success': False, 'error': err}), 400
+            if len(data['password']) < 4:
+                return jsonify({'success': False, 'error': 'Password must be at least 4 characters'}), 400
             updates.append('password_hash = ?')
-            params.append(_hash_password(data['password']))
+            params.append(hashlib.sha256(data['password'].encode()).hexdigest())
         
         if not updates:
             return jsonify({'success': False, 'error': 'No fields to update'}), 400
@@ -1940,6 +1652,65 @@ def update_user(user_id):
         return jsonify({'success': False, 'error': 'Username already taken'}), 409
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# =============================================================================
+# Logo
+# =============================================================================
+
+_LOGO_ALLOWED_MIMES = {'image/svg+xml', 'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
+
+
+@app.route('/api/logo', methods=['GET'])
+def get_logo():
+    """Serve the custom logo if one has been uploaded, otherwise 404."""
+    if os.path.exists(LOGO_PATH):
+        mime_file = LOGO_PATH + '.mime'
+        mime = 'image/svg+xml'
+        if os.path.exists(mime_file):
+            with open(mime_file) as mf:
+                mime = mf.read().strip() or mime
+        with open(LOGO_PATH, 'rb') as lf:
+            data = lf.read()
+        return Response(data, content_type=mime,
+                        headers={'Cache-Control': 'public, max-age=3600'})
+    return jsonify({'error': 'No custom logo'}), 404
+
+
+@app.route('/api/admin/logo', methods=['POST'])
+@require_admin
+def upload_logo():
+    """Upload a custom logo. Admin only. Max 2 MB, images only."""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': 'No file provided'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'success': False, 'error': 'Empty filename'}), 400
+    mime = (f.content_type or '').split(';')[0].strip()
+    if mime not in _LOGO_ALLOWED_MIMES:
+        return jsonify({'success': False, 'error': 'Only image files are allowed (SVG, PNG, JPEG, GIF, WEBP)'}), 400
+    content = f.read()
+    if len(content) > 2 * 1024 * 1024:
+        return jsonify({'success': False, 'error': 'Logo must be under 2 MB'}), 413
+    with open(LOGO_PATH, 'wb') as out:
+        out.write(content)
+    with open(LOGO_PATH + '.mime', 'w') as out:
+        out.write(mime)
+    logger.info('[%s] logo uploaded mime=%s size=%d ip=%s',
+                g.get('request_id', '-'), mime, len(content), get_client_ip())
+    return jsonify({'success': True})
+
+
+@app.route('/api/admin/logo', methods=['DELETE'])
+@require_admin
+def reset_logo():
+    """Remove the custom logo, reverting to the default. Admin only."""
+    for path in (LOGO_PATH, LOGO_PATH + '.mime'):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    return jsonify({'success': True})
+
 
 # =============================================================================
 # File Upload Security
@@ -2027,7 +1798,7 @@ def on_ws_connect(auth):
     if token:
         payload = _decode_jwt(token)
         if payload:
-            logger.info('ws connect user=%s sid=%s', payload.get('username', '?'), request.sid)
+            logger.info('ws connect user=%s sid=%s', payload.get('usr', '?'), request.sid)
         else:
             logger.info('ws connect invalid-token sid=%s ip=%s', request.sid, get_client_ip())
     else:
@@ -2037,358 +1808,6 @@ def on_ws_connect(auth):
 @socketio.on('disconnect')
 def on_ws_disconnect():
     logger.info('ws disconnect sid=%s', request.sid)
-
-
-# =============================================================================
-# Logout — revoke the JWT so it cannot be reused before expiry
-# =============================================================================
-
-@app.route('/api/logout', methods=['POST'])
-def logout_user():
-    """Revoke the caller's JWT. Works for both user and admin tokens."""
-    token = _extract_token()
-    if token:
-        payload = _decode_jwt(token)
-        if payload:
-            _revoke_token(payload['jti'], payload.get('exp', 0))
-            _cleanup_revoked_tokens()  # opportunistic cleanup
-            logger.info('[%s] token revoked sub=%s ip=%s',
-                        g.get('request_id', '-'), payload.get('sub'), get_client_ip())
-    return jsonify({'success': True})
-
-
-# =============================================================================
-# User Avatar — upload + serve
-# =============================================================================
-
-@app.route('/api/user/avatar/<int:user_id>', methods=['GET'])
-def get_avatar(user_id: int):
-    """Serve a user's avatar blob. Returns 404 if none uploaded."""
-    try:
-        db = get_db()
-        ensure_tables()
-        row = db.execute('SELECT avatar_data, avatar_type FROM users WHERE id = ?', (user_id,)).fetchone()
-        if not row or not row['avatar_data']:
-            return Response(status=404)
-        mime = row['avatar_type'] or 'image/jpeg'
-        return Response(row['avatar_data'], mimetype=mime,
-                        headers={'Cache-Control': 'public, max-age=86400'})
-    except Exception as e:
-        return Response(status=500)
-
-
-def _save_avatar(user_id: int, file_storage) -> str | None:
-    """Validate and store an avatar image; returns error string or None on success."""
-    if not file_storage or not file_storage.filename:
-        return 'No file provided'
-    mime = file_storage.content_type or ''
-    if mime not in ALLOWED_AVATAR_MIMES:
-        # Try to detect from extension
-        ext = os.path.splitext(file_storage.filename)[1].lower()
-        mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-                    '.gif': 'image/gif', '.webp': 'image/webp'}
-        mime = mime_map.get(ext, '')
-        if not mime:
-            return 'File type not allowed (JPEG, PNG, GIF, WebP only)'
-    file_storage.seek(0, 2)
-    size = file_storage.tell()
-    file_storage.seek(0)
-    if size > MAX_AVATAR_BYTES:
-        return f'Avatar exceeds {MAX_AVATAR_BYTES // 1024 // 1024} MB limit'
-    data = file_storage.read()
-    db = get_db()
-    ensure_tables()
-    db.execute('UPDATE users SET avatar_data = ?, avatar_type = ? WHERE id = ?', (data, mime, user_id))
-    db.commit()
-    return None
-
-
-@app.route('/api/user/avatar', methods=['POST'])
-@require_user
-def upload_own_avatar():
-    """Upload the authenticated user's own avatar."""
-    if 'avatar' not in request.files:
-        return jsonify({'success': False, 'error': 'No file in request (field: avatar)'}), 400
-    err = _save_avatar(g.jwt_user_id, request.files['avatar'])
-    if err:
-        return jsonify({'success': False, 'error': err}), 400
-    return jsonify({'success': True, 'avatarUrl': f'/api/user/avatar/{g.jwt_user_id}'})
-
-
-@app.route('/api/admin/users/<int:user_id>/avatar', methods=['POST'])
-@require_admin
-def upload_user_avatar_admin(user_id: int):
-    """Admin: upload / replace a user's avatar."""
-    db = get_db()
-    ensure_tables()
-    if not db.execute('SELECT id FROM users WHERE id = ?', (user_id,)).fetchone():
-        return jsonify({'success': False, 'error': 'User not found'}), 404
-    if 'avatar' not in request.files:
-        return jsonify({'success': False, 'error': 'No file in request (field: avatar)'}), 400
-    err = _save_avatar(user_id, request.files['avatar'])
-    if err:
-        return jsonify({'success': False, 'error': err}), 400
-    return jsonify({'success': True, 'avatarUrl': f'/api/user/avatar/{user_id}'})
-
-
-# =============================================================================
-# Logo — admin upload + public serve
-# =============================================================================
-
-@app.route('/api/logo', methods=['GET'])
-def get_logo():
-    """Serve the custom app logo if one has been uploaded, else 404."""
-    try:
-        db = get_db()
-        ensure_tables()
-        row = db.execute("SELECT value FROM app_config WHERE key = 'logo_type'").fetchone()
-        logo_type = row['value'] if row else None
-        row2 = db.execute("SELECT value FROM app_config WHERE key = 'logo_data'").fetchone()
-        logo_b64 = row2['value'] if row2 else None
-        if not logo_b64 or not logo_type:
-            return Response(status=404)
-        data = base64.b64decode(logo_b64)
-        return Response(data, mimetype=logo_type,
-                        headers={'Cache-Control': 'public, max-age=3600'})
-    except Exception:
-        return Response(status=500)
-
-
-@app.route('/api/admin/logo', methods=['POST'])
-@require_admin
-def upload_logo():
-    """Admin: upload a new app logo (PNG/SVG/JPEG/WebP, max 1 MB)."""
-    if 'logo' not in request.files:
-        return jsonify({'success': False, 'error': 'No file in request (field: logo)'}), 400
-    f = request.files['logo']
-    mime = f.content_type or ''
-    ALLOWED_LOGO_MIMES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'}
-    if mime not in ALLOWED_LOGO_MIMES:
-        ext = os.path.splitext(f.filename or '')[1].lower()
-        ext_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-                   '.svg': 'image/svg+xml', '.webp': 'image/webp', '.gif': 'image/gif'}
-        mime = ext_map.get(ext, '')
-        if not mime:
-            return jsonify({'success': False, 'error': 'Allowed: JPEG, PNG, SVG, WebP, GIF'}), 400
-    f.seek(0, 2)
-    size = f.tell()
-    f.seek(0)
-    if size > 1024 * 1024:
-        return jsonify({'success': False, 'error': 'Logo exceeds 1 MB'}), 413
-    data = f.read()
-    b64 = base64.b64encode(data).decode()
-    db = get_db()
-    ensure_tables()
-    for key, val in [('logo_data', b64), ('logo_type', mime)]:
-        db.execute('''INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP''', (key, val, val))
-    db.commit()
-    logger.info('[%s] logo updated mime=%s size=%d', g.get('request_id', '-'), mime, size)
-    return jsonify({'success': True})
-
-
-@app.route('/api/admin/logo', methods=['DELETE'])
-@require_admin
-def delete_logo():
-    """Admin: remove the custom logo, reverting to the default logo.svg."""
-    db = get_db()
-    ensure_tables()
-    db.execute("DELETE FROM app_config WHERE key IN ('logo_data','logo_type')")
-    db.commit()
-    return jsonify({'success': True})
-
-
-# =============================================================================
-# Passkey / WebAuthn routes
-# =============================================================================
-
-@app.route('/auth/passkey/register/options', methods=['POST'])
-def passkey_register_options():
-    if not ACCOUNTS_ENABLED:
-        return jsonify({'error': 'Accounts disabled'}), 404
-    if not PASSKEY_SUPPORT:
-        return jsonify({'error': 'Passkey support not available on this server'}), 501
-    ip = get_client_ip()
-    if not _register_rate_ok(ip):
-        return jsonify({'error': 'Too many registration attempts'}), 429
-    data = request.get_json(silent=True) or {}
-    username = (data.get('username') or '').strip()
-    err = _validate_username(username)
-    if err:
-        return jsonify({'error': err}), 400
-    db = get_db()
-    ensure_tables()
-    existing = db.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
-    if existing:
-        user_db_id = existing['id']
-        is_new_user = False
-    else:
-        user_db_id = None
-        is_new_user = True
-    # Use a stable bytes ID: new users get a tmp UUID, existing get their DB id
-    uid_hex = uuid.uuid4().hex if is_new_user else f'{user_db_id:016x}'
-    user_id_bytes = bytes.fromhex(uid_hex) if len(uid_hex) == 32 else uid_hex.encode()[:16]
-    options = _webauthn.generate_registration_options(
-        rp_id=RP_ID, rp_name=RP_NAME,
-        user_id=user_id_bytes, user_name=username, user_display_name=username,
-        authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key=ResidentKeyRequirement.PREFERRED,
-            user_verification=UserVerificationRequirement.PREFERRED,
-        ),
-    )
-    cid = _pk_put({'challenge': options.challenge, 'username': username,
-                   'is_new_user': is_new_user, 'db_id': user_db_id})
-    return jsonify({'cid': cid, 'options': json.loads(_webauthn.options_to_json(options))})
-
-
-@app.route('/auth/passkey/register/verify', methods=['POST'])
-def passkey_register_verify():
-    if not ACCOUNTS_ENABLED:
-        return jsonify({'error': 'Accounts disabled'}), 404
-    if not PASSKEY_SUPPORT:
-        return jsonify({'error': 'Passkey support not available on this server'}), 501
-    ip = get_client_ip()
-    data = request.get_json(silent=True) or {}
-    c = _pk_take(data.get('cid'))
-    if not c:
-        return jsonify({'error': 'Challenge expired — please try again'}), 400
-    cred_data = data.get('credential')
-    if not cred_data or not isinstance(cred_data, dict):
-        return jsonify({'error': 'Missing credential'}), 400
-    try:
-        resp = cred_data.get('response', {})
-        transports = []
-        for t in (resp.get('transports') or []):
-            try:
-                transports.append(AuthenticatorTransport(t))
-            except ValueError:
-                pass
-        cred = RegistrationCredential(
-            id=cred_data['id'],
-            raw_id=_b64url_to_bytes(cred_data['rawId']),
-            response=AuthenticatorAttestationResponse(
-                client_data_json=_b64url_to_bytes(resp['clientDataJSON']),
-                attestation_object=_b64url_to_bytes(resp['attestationObject']),
-                transports=transports,
-            ),
-        )
-    except Exception as exc:
-        logger.warning('Passkey register parse error: %s', exc)
-        return jsonify({'error': 'Invalid credential format'}), 400
-    try:
-        verification = _webauthn.verify_registration_response(
-            credential=cred, expected_challenge=c['challenge'],
-            expected_rp_id=RP_ID, expected_origin=_passkey_origin(),
-            require_user_verification=False,
-        )
-    except Exception as exc:
-        logger.warning('Passkey register verify error: %s', exc)
-        return jsonify({'error': 'Passkey verification failed: ' + str(exc)}), 400
-    cred_id = _bytes_to_b64url(verification.credential_id)
-    pub_key = _bytes_to_b64url(verification.credential_public_key)
-    sign_count = verification.sign_count
-    transports_list = [t.value if hasattr(t, 'value') else str(t) for t in transports]
-    db = get_db()
-    ensure_tables()
-    if c['is_new_user']:
-        _record_register_attempt(ip)
-        try:
-            db.execute('INSERT INTO users (username, password_hash) VALUES (?, NULL)', (c['username'],))
-            db.commit()
-            user_row = db.execute('SELECT id, username FROM users WHERE username = ?', (c['username'],)).fetchone()
-        except sqlite3.IntegrityError:
-            return jsonify({'error': 'Username already taken'}), 409
-        user_id = user_row['id']
-    else:
-        user_id = c['db_id']
-        user_row = db.execute('SELECT id, username FROM users WHERE id = ?', (user_id,)).fetchone()
-        if not user_row:
-            return jsonify({'error': 'User not found'}), 404
-    try:
-        db.execute('INSERT OR REPLACE INTO passkeys (cred_id, user_id, public_key, sign_count, transports) VALUES (?,?,?,?,?)',
-                   (cred_id, user_id, pub_key, sign_count, json.dumps(transports_list)))
-        db.commit()
-    except Exception as exc:
-        logger.error('Passkey store error: %s', exc)
-        return jsonify({'error': 'Failed to store passkey'}), 500
-    token = _issue_jwt(str(user_id), 'user', {'username': user_row['username']})
-    logger.info('[%s] passkey registered username=%s ip=%s', g.get('request_id', '-'), c['username'], ip)
-    return jsonify({'success': True, 'token': token, 'user': {'id': user_id, 'username': user_row['username']}}), (201 if c['is_new_user'] else 200)
-
-
-@app.route('/auth/passkey/login/options', methods=['POST'])
-def passkey_login_options():
-    if not ACCOUNTS_ENABLED:
-        return jsonify({'error': 'Accounts disabled'}), 404
-    if not PASSKEY_SUPPORT:
-        return jsonify({'error': 'Passkey support not available on this server'}), 501
-    options = _webauthn.generate_authentication_options(
-        rp_id=RP_ID,
-        user_verification=UserVerificationRequirement.PREFERRED,
-        allow_credentials=[],
-    )
-    cid = _pk_put({'challenge': options.challenge})
-    return jsonify({'cid': cid, 'options': json.loads(_webauthn.options_to_json(options))})
-
-
-@app.route('/auth/passkey/login/verify', methods=['POST'])
-def passkey_login_verify():
-    if not ACCOUNTS_ENABLED:
-        return jsonify({'error': 'Accounts disabled'}), 404
-    if not PASSKEY_SUPPORT:
-        return jsonify({'error': 'Passkey support not available on this server'}), 501
-    ip = get_client_ip()
-    if not _login_rate_ok(ip):
-        return jsonify({'error': 'Too many login attempts'}), 429
-    data = request.get_json(silent=True) or {}
-    c = _pk_take(data.get('cid'))
-    if not c:
-        return jsonify({'error': 'Challenge expired — please try again'}), 400
-    cred_data = data.get('credential')
-    if not cred_data or not isinstance(cred_data, dict):
-        return jsonify({'error': 'Missing credential'}), 400
-    db = get_db()
-    ensure_tables()
-    passkey = db.execute('SELECT * FROM passkeys WHERE cred_id = ?', (cred_data.get('id'),)).fetchone()
-    if not passkey:
-        return jsonify({'error': 'Unknown passkey — please register first'}), 404
-    try:
-        resp = cred_data.get('response', {})
-        cred = AuthenticationCredential(
-            id=cred_data['id'],
-            raw_id=_b64url_to_bytes(cred_data['rawId']),
-            response=AuthenticatorAssertionResponse(
-                client_data_json=_b64url_to_bytes(resp['clientDataJSON']),
-                authenticator_data=_b64url_to_bytes(resp['authenticatorData']),
-                signature=_b64url_to_bytes(resp['signature']),
-                user_handle=_b64url_to_bytes(resp['userHandle']) if resp.get('userHandle') else None,
-            ),
-        )
-    except Exception as exc:
-        logger.warning('Passkey login parse error: %s', exc)
-        return jsonify({'error': 'Invalid credential format'}), 400
-    try:
-        verification = _webauthn.verify_authentication_response(
-            credential=cred, expected_challenge=c['challenge'],
-            expected_rp_id=RP_ID, expected_origin=_passkey_origin(),
-            credential_public_key=_b64url_to_bytes(passkey['public_key']),
-            credential_current_sign_count=passkey['sign_count'],
-            require_user_verification=False,
-        )
-    except Exception as exc:
-        _record_login_failure(ip)
-        logger.warning('Passkey login verify error: %s', exc)
-        return jsonify({'error': 'Passkey authentication failed'}), 401
-    db.execute('UPDATE passkeys SET sign_count = ?, last_used_at = CURRENT_TIMESTAMP WHERE cred_id = ?',
-               (verification.new_sign_count, passkey['cred_id']))
-    db.commit()
-    user = db.execute('SELECT id, username FROM users WHERE id = ?', (passkey['user_id'],)).fetchone()
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    _reset_login_failures(ip)
-    token = _issue_jwt(str(user['id']), 'user', {'username': user['username']})
-    logger.info('[%s] passkey login username=%s ip=%s', g.get('request_id', '-'), user['username'], ip)
-    return jsonify({'success': True, 'token': token, 'user': {'id': user['id'], 'username': user['username']}})
 
 
 # =============================================================================
@@ -2419,7 +1838,7 @@ if __name__ == '__main__':
     print(f"Database: {DATABASE_PATH}")
     print(f"CORS origins: {CORS_ALLOWED_ORIGINS}")
     print(f"Trust proxy: {TRUST_PROXY}")
-    print(f"Accounts enabled: {ACCOUNTS_ENABLED}")
+    print(f"Freeplay default: {FREEPLAY_DEFAULT}")
     print(f"Require user password: {REQUIRE_USER_PASSWORD}")
     print(f"JWT TTL: {JWT_TTL}s")
     print(f"Max upload: {MAX_UPLOAD_MB} MB")

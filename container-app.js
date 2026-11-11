@@ -1,4 +1,3 @@
-// ==================== STATE ====================
 let state = {
     questions: [],
     usedQuestions: new Set(),
@@ -30,7 +29,6 @@ let state = {
     gameEnded: false // Whether the game has ended
 };
 
-// Team color palette
 const TEAM_COLORS = [
     'oklch(0.50 0.20 290)', // Purple
     'oklch(0.60 0.15 190)', // Teal
@@ -40,10 +38,8 @@ const TEAM_COLORS = [
     'oklch(0.60 0.18 60)',  // Yellow
 ];
 
-// ==================== REGEX VALIDATION ====================
 const REGEX_TIMEOUT_MS = 100;
 
-// Common regex pattern templates for Add Question form
 const REGEX_TEMPLATES = {
     number: { pattern: '^{value}$', description: 'Exact number match' },
     numberOrWord: { pattern: '^({value}|{word})$', description: 'Accepts numeric or word form' },
@@ -120,7 +116,6 @@ async function validateRegexAnswer(input, pattern, timeoutMs = REGEX_TIMEOUT_MS)
     });
 }
 
-// ==================== SAMPLE QUESTIONS ====================
 const sampleQuestions = [
     { Category: "Geography", Difficulty: "L1", Type: "multiple_choice", Question: "What is the capital of France?", Answers: ["Paris"], IncorrectAnswers: ["London", "Berlin", "Madrid", "Rome", "Vienna", "Amsterdam", "Brussels"] },
     { Category: "Geography", Difficulty: "L1", Type: "multiple_choice", Question: "Which continent is Brazil located in?", Answers: ["South America"], IncorrectAnswers: ["Africa", "Europe", "Asia", "North America", "Australia", "Central America", "Antarctica"] },
@@ -140,7 +135,6 @@ const sampleQuestions = [
     { Category: "Pop Culture", Difficulty: "L2", Type: "hidden", Question: "In the movie 'The Matrix', what color pill does Neo take?", Answers: ["Red"], IncorrectAnswers: [], Description: "The red pill represents truth and freedom from the simulation" }
 ];
 
-// ==================== AUDIO ====================
 let audioContext = null;
 
 function initAudio() {
@@ -191,7 +185,6 @@ function playSound(type) {
     }
 }
 
-// ==================== DOM ELEMENTS ====================
 const elements = {
     sidebar: document.getElementById('sidebar'),
     sidebarToggle: document.getElementById('sidebarToggle'),
@@ -350,7 +343,6 @@ const elements = {
     timerSettings: document.getElementById('timerSettings')
 };
 
-// ==================== STORAGE ====================
 function saveState() {
     const saveData = {
         ...state,
@@ -390,13 +382,11 @@ function loadState() {
     }
 }
 
-// ==================== UI UPDATES ====================
 function updateQuestionCounter() {
     const remaining = state.questions.length - state.usedQuestions.size;
     elements.remainingCount.textContent = remaining;
 }
 
-// Recalculate max rows based on current questions
 function recalculateMaxRows() {
     const categories = {};
     state.questions.forEach(q => {
@@ -419,7 +409,6 @@ function recalculateMaxRows() {
     }
 }
 
-// Update volume slider UI
 function updateVolumeUI() {
     if (elements.volumeSlider) {
         elements.volumeSlider.value = Math.round(state.volume * 100);
@@ -438,7 +427,6 @@ function updateVolumeUI() {
     }
 }
 
-// Show confetti animation on correct answer (full feedback mode)
 function showConfetti() {
     const container = document.createElement('div');
     container.className = 'confetti-container';
@@ -458,7 +446,6 @@ function showConfetti() {
     setTimeout(() => container.remove(), 4000);
 }
 
-// Add loading state to question card
 function setQuestionLoading(loading) {
     if (loading) {
         elements.questionCard.classList.add('loading');
@@ -469,7 +456,6 @@ function setQuestionLoading(loading) {
     }
 }
 
-// Show empty state when no questions
 function showEmptyState(container, message = 'No questions loaded') {
     container.innerHTML = `
         <div class="empty-state">
@@ -480,7 +466,6 @@ function showEmptyState(container, message = 'No questions loaded') {
     `;
 }
 
-// Show error alert to user
 function showError(title, message) {
     showToast(`${title}: ${message}`, 'error', 5000);
 }
@@ -711,7 +696,6 @@ function proceedAfterAward() {
     }
 }
 
-// ==================== QUESTION LOGIC ====================
 function shuffleArray(array) {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -823,7 +807,6 @@ function displayQuestion(question, index, isModal = false) {
     }
 }
 
-// ==================== QUESTION TYPE RENDERERS ====================
 
 function renderMultipleChoiceQuestion(question, answersEl) {
     // Determine how many incorrect answers to show based on difficulty (default 3)
@@ -1087,7 +1070,6 @@ function renderGeneralQuestion(question, answersEl) {
     setTimeout(() => input.focus(), 100);
 }
 
-// Helper function to mark question as used (extracted from reveal functions)
 function markQuestionUsed() {
     clearTimer(); // Stop timer when answer is revealed
     if (state.currentQuestionIndex !== null) {
@@ -1214,7 +1196,6 @@ function revealAnswer(clickedBtn, container) {
     showAwardButtons();
 }
 
-// Show description after answer is revealed (for learning purposes)
 function showDescriptionAfterAnswer(container, description, isCorrect = false) {
     // Find the dedicated description element based on game mode
     let descEl;
@@ -1250,7 +1231,6 @@ function showDescriptionAfterAnswer(container, description, isCorrect = false) {
     descEl.classList.remove('hidden');
 }
 
-// Legacy wrapper for backwards compatibility
 function showDescriptionAfterIncorrect(container, description) {
     showDescriptionAfterAnswer(container, description, false);
 }
@@ -1283,7 +1263,6 @@ function skipQuestion() {
     nextQuestion();
 }
 
-// ==================== JEOPARDY BOARD ====================
 function buildJeopardyBoard() {
     if (state.questions.length === 0) {
         showEmptyState(elements.jeopardyBoard, 'No questions loaded');
@@ -1461,7 +1440,6 @@ function buildJeopardyBoard() {
     }
 }
 
-// Format point display based on settings
 function formatPointDisplay(points) {
     if (state.pointLabel && state.pointLabel.trim()) {
         return `${points} ${state.pointLabel}`;
@@ -1493,8 +1471,6 @@ function closeModal() {
     state.currentQuestionIndex = null;
 }
 
-// ==================== IMPORT/EXPORT ====================
-// Generate MD5 hash from question + answers for deduplication
 function generateQuestionId(q) {
     const question = (q.Question || '').trim().toLowerCase();
     const answers = (q.Answers || []).map(a => a.trim().toLowerCase()).sort().join('|');
@@ -1767,7 +1743,6 @@ function loadSampleQuestions() {
     showToast(`Loaded ${newQuestions.length} sample questions!`, 'success');
 }
 
-// ==================== SERVER CATEGORIES ====================
 const API_BASE = '/api';
 
 async function openCategoriesModal() {
@@ -1994,14 +1969,12 @@ async function importCategory(categoryId, categoryName, evt) {
     }
 }
 
-// Escape HTML to prevent XSS
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-// ==================== ADD QUESTION ====================
 function addQuestion(e) {
     e.preventDefault();
     
@@ -2211,7 +2184,6 @@ function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ==================== RESET ====================
 function resetAll() {
     if (!confirm('Are you sure you want to reset all data? This will clear all questions, scores, and settings.')) {
         return;
@@ -2318,7 +2290,6 @@ function resetQuestions() {
     showToast('All questions reset to unanswered!', 'info');
 }
 
-// ==================== GAME MODE ====================
 function setGameMode(mode) {
     state.gameMode = mode;
     
@@ -2338,13 +2309,11 @@ function setGameMode(mode) {
     saveState();
 }
 
-// ==================== SIDEBAR ====================
 function toggleSidebar() {
     elements.sidebar.classList.toggle('open');
     elements.sidebarToggle.classList.toggle('active');
 }
 
-// Accordion toggle for control sections
 function initAccordion() {
     const sections = document.querySelectorAll('.control-section[data-section]');
     
@@ -2385,7 +2354,6 @@ function saveAccordionState() {
     localStorage.setItem('sidebarCollapsedSections', JSON.stringify(collapsedSections));
 }
 
-// ==================== ADD QUESTION MODAL ====================
 function openAddQuestionModal() {
     const modal = document.getElementById('addQuestionModal');
     modal.classList.remove('hidden');
@@ -2403,7 +2371,6 @@ function closeAddQuestionModal() {
     initAnswerOptions();
 }
 
-// ==================== DYNAMIC ANSWER OPTIONS ====================
 function initAnswerOptions() {
     const container = elements.answerOptionsList;
     if (!container) return;
@@ -2504,7 +2471,6 @@ function getAnswerOptionsData() {
     return { correct, incorrect };
 }
 
-// ==================== QUESTION MANAGER TABS ====================
 function switchQuestionTab(tabName) {
     // Update tab buttons
     document.querySelectorAll('.question-tabs .tab-btn').forEach(btn => {
@@ -2545,7 +2511,6 @@ function initQuestionTabs() {
     });
 }
 
-// ==================== BULK ADD QUESTIONS ====================
 function updateBulkCount() {
     const rows = elements.bulkAddRows ? elements.bulkAddRows.querySelectorAll('.bulk-row') : [];
     const countEl = document.querySelector('.bulk-count');
@@ -2699,7 +2664,6 @@ function submitBulkQuestions() {
     showToast(`Added ${questions.length} questions!`, 'success');
 }
 
-// Update image preview in settings
 function updateImagePreview() {
     if (state.pointImageUrl && state.pointImageMode !== 'none') {
         elements.imagePreviewGroup.classList.remove('hidden');
@@ -2709,7 +2673,6 @@ function updateImagePreview() {
     }
 }
 
-// ==================== EVENT LISTENERS ====================
 function initEventListeners() {
     // Sidebar
     elements.sidebarToggle.addEventListener('click', toggleSidebar);
@@ -3029,7 +2992,6 @@ function initEventListeners() {
 
 
 
-// ==================== TOAST NOTIFICATIONS ====================
 function showToast(message, type = 'info', duration = 3000) {
     const container = document.getElementById('toastContainer');
     if (!container) {
@@ -3052,7 +3014,6 @@ function showToast(message, type = 'info', duration = 3000) {
     }, duration);
 }
 
-// ==================== QUESTION TIMER ====================
 let timerInterval = null;
 let timerSeconds = 0;
 
@@ -3105,7 +3066,6 @@ function clearTimer() {
     }
 }
 
-// ==================== SCORE HISTORY / UNDO ====================
 let scoreHistory = [];
 
 function recordScoreChange(teamIndex, points, action) {
@@ -3148,7 +3108,6 @@ function adjustScore(teamIndex, delta) {
     saveState();
 }
 
-// ==================== KEYBOARD SHORTCUTS HELP ====================
 function initShortcutsHelp() {
     const helpBtn = document.getElementById('shortcutsHelpBtn');
     const overlay = document.getElementById('shortcutsOverlay');
@@ -3165,7 +3124,6 @@ function initShortcutsHelp() {
 
 
 
-// ==================== INITIALIZATION ====================
 function init() {
     const hasState = loadState();
     
@@ -3246,7 +3204,6 @@ function init() {
     registerServiceWorker();
 }
 
-// ==================== WELCOME SCREEN ====================
 function initWelcomeScreen() {
     // Render initial team setup
     renderSetupTeams();
@@ -3428,7 +3385,6 @@ function showWelcomeScreen() {
     saveState();
 }
 
-// ==================== GAME OVER ====================
 function showGameOverScreen() {
     state.gameEnded = true;
     saveState();
@@ -3560,12 +3516,10 @@ function newGame() {
     showWelcomeScreen();
 }
 
-// Function to trigger game over (can be called from UI)
 function endGame() {
     showGameOverScreen();
 }
 
-// Register service worker for offline PWA support
 function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('service-worker.js')
@@ -3578,5 +3532,4 @@ function registerServiceWorker() {
     }
 }
 
-// Start the app
 document.addEventListener('DOMContentLoaded', init);
